@@ -28,7 +28,7 @@ async function createScene() {
   const root = new BABYLON.TransformNode("root", scene);
 
   // 도면 JSON 로드
-  const data = await fetch("Drawing1.json").then(r => r.json());
+  const data = await fetch("Office.json").then(r => r.json());
   const layers = data.layers;
 
   // 바운딩 박스 계산
@@ -107,3 +107,4 @@ window.addEventListener("resize", () => {
 </script>
 </body>
 </html>
+
