@@ -14,7 +14,6 @@
       height: 100%;
       background: #000;
     }
-
     #renderCanvas {
       width: 100%;
       height: 100%;
@@ -22,19 +21,19 @@
       display: block;
     }
 
-    /* WebXR DOM Overlay용 컨테이너 */
+    /* WebXR DOM Overlay(UI 컨테이너) */
     #ui-overlay {
       position: fixed;
       left: 0;
       top: 0;
       width: 100%;
       height: 100%;
-      pointer-events: none;          /* 기본은 클릭 막기 */
+      pointer-events: none;
       z-index: 9999;
       font-family: system-ui, sans-serif;
     }
 
-    /* 가운데 + 모양 크로스헤어 */
+    /* + 모양 크로스헤어 */
     #crosshair {
       position: absolute;
       left: 50%;
@@ -52,20 +51,18 @@
       top: 50%;
       background: #fff;
     }
-    /* 세로선 */
-    #crosshair::before {
+    #crosshair::before { /* 세로선 */
       width: 2px;
       height: 100%;
       transform: translate(-50%, -50%);
     }
-    /* 가로선 */
-    #crosshair::after {
+    #crosshair::after {  /* 가로선 */
       width: 100%;
       height: 2px;
       transform: translate(-50%, -50%);
     }
 
-    /* 아래쪽 UI 패널 */
+    /* 아래 Anchor UI */
     #ui-panel {
       position: absolute;
       left: 50%;
@@ -76,57 +73,62 @@
       border-radius: 6px;
       color: #fff;
       font-size: 14px;
-      pointer-events: auto;          /* 패널은 클릭 가능 */
+      pointer-events: auto;
       display: flex;
       align-items: center;
       gap: 4px;
     }
-
     #ui-panel select,
     #ui-panel button {
       font-size: 14px;
     }
 
-    label {
-      margin-right: 4px;
+    #status {
+      margin-left: 6px;
+      font-size: 12px;
+      opacity: 0.8;
     }
   </style>
 </head>
 <body>
   <canvas id="renderCanvas"></canvas>
 
-  <!-- AR에서도 보이게 만들 WebXR DOM Overlay -->
+  <!-- AR에서도 보이게 할 UI -->
   <div id="ui-overlay" class="dom-overlay-container">
     <div id="crosshair"></div>
     <div id="ui-panel">
-      <label for="anchorSelect">Anchor:</label>
+      <span>Anchor:</span>
       <select id="anchorSelect">
         <option value="A1">A1</option>
         <option value="A2">A2</option>
       </select>
       <button id="alignBtn">현재 위치에 정렬</button>
+      <span id="status"></span>
     </div>
   </div>
 
-  <!-- SVG에서 A1/A2 좌표 읽어오는 스크립트 -->
+  <!-- SVG에서 A1/A2를 읽어오는 스크립트 (이미 만들어 둔 파일) -->
   <script src="./js/plan-ar.js"></script>
 
   <script>
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true);
-    let root;
-    let xrHelper;
-    let currentAnchorName = "A1";
 
-    // plan-ar.js에서 채워주는 기준점 (SVG의 cx, cy 값)
-    // 예: window.planAnchors = { A1:{x:..,y:..}, A2:{x:..,y:..} }
-    let planAnchors = null;
+    let xrHelper = null;
+    let root = null;
+    let mmToM = 0.001;
+    let centerX = 0;
+    let centerY = 0;
+
+    // 상태 표시
+    function setStatus(text) {
+      document.getElementById("status").textContent = text || "";
+    }
 
     async function createScene() {
       const scene = new BABYLON.Scene(engine);
       scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
 
-      // XR (AR) 기본 설정
       xrHelper = await scene.createDefaultXRExperienceAsync({
         uiOptions: {
           sessionMode: "immersive-ar",
@@ -134,7 +136,7 @@
         }
       });
 
-      // ★ WebXR DOM Overlay 활성화 (핵심)
+      // DOM Overlay 활성화 (AR 모드에서도 UI 보이게)
       const fm = xrHelper.baseExperience.featuresManager;
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
@@ -142,13 +144,13 @@
 
       root = new BABYLON.TransformNode("root", scene);
 
-      // DXF → JSON에서 도면 그리기 (기존 코드 그대로)
+      // 도면 JSON 로드
       const data = await fetch("Office.json").then(r => r.json());
       const layers = data.layers;
 
+      // 바운딩 박스
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
-
       function updateBounds(x, y) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
@@ -167,16 +169,16 @@
         });
       });
 
-      const mmToM = 0.001;
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
+      centerX = (minX + maxX) / 2;
+      centerY = (minY + maxY) / 2;
 
       function toWorld(x, y) {
-        const nx = (x - cx) * mmToM;
-        const nz = (y - cy) * mmToM;
+        const nx = (x - centerX) * mmToM;
+        const nz = (y - centerY) * mmToM;
         return new BABYLON.Vector3(nx, 0, nz);
       }
 
+      // 선 그리기
       Object.keys(layers).forEach(layer => {
         layers[layer].forEach(e => {
           if (e.type === "LINE") {
@@ -197,84 +199,57 @@
         });
       });
 
-      // AR에 들어갈 때, 처음 위치(카메라 앞 2m)에 도면 두기
+      // AR 진입 시 카메라 앞 2m에 도면 배치
+      const initialDistance = 2.0;
       xrHelper.baseExperience.onStateChangedObservable.add((state) => {
         if (state === BABYLON.WebXRState.IN_XR) {
           const cam = xrHelper.baseExperience.camera;
-          const fwd = cam.getForwardRay().direction;
-          const dist = 2.0;
-          root.position = cam.position.add(fwd.scale(dist));
+          const forward = cam.getForwardRay().direction;
+          root.position = cam.position.add(forward.scale(initialDistance));
         }
+      });
+
+      // UI 이벤트를 여기서 설정 (scene / root / centerX,centerY에 접근 가능)
+      const anchorSelect = document.getElementById("anchorSelect");
+      const alignBtn = document.getElementById("alignBtn");
+
+      alignBtn.addEventListener("click", () => {
+        const current = anchorSelect.value; // "A1" 또는 "A2"
+        const plan = window.planAnchors && window.planAnchors[current];
+
+        if (!plan) {
+          setStatus(current + " 기준점 정보를 찾을 수 없음");
+          return;
+        }
+        if (!xrHelper || !root) return;
+
+        // 1) 크로스헤어가 가리키는 세계 좌표 (카메라 앞 2m)
+        const cam = xrHelper.baseExperience.camera;
+        const forward = cam.getForwardRay().direction;
+        const targetWorld = cam.position.add(forward.scale(initialDistance));
+
+        // 2) 도면 좌표계에서 Anchor의 world 좌표
+        const anchorLocal = toWorld(plan.x, plan.y); // root 로컬 좌표
+        const anchorWorld = BABYLON.Vector3.TransformCoordinates(
+          anchorLocal,
+          root.getWorldMatrix()
+        );
+
+        // 3) anchorWorld 를 targetWorld 로 평행이동
+        const delta = targetWorld.subtract(anchorWorld);
+        root.position = root.position.add(delta);
+
+        setStatus(current + " 정렬 완료");
+        setTimeout(() => setStatus(""), 1500);
       });
 
       return scene;
     }
 
-    // 크로스헤어가 가리키는 세계 좌표 (카메라 앞 2m 지점)
-    function getCurrentCrosshairWorldPos() {
-      if (!xrHelper) return null;
-      const cam = xrHelper.baseExperience.camera;
-      const forward = cam.getForwardRay().direction;
-      const distance = 2.0;
-      return cam.position.add(forward.scale(distance));
-    }
-
-    // 선택한 Anchor를 현재 크로스헤어 위치에 1점 정렬 (우선: 평행이동만)
-    function alignCurrentAnchor() {
-      if (!planAnchors || !planAnchors[currentAnchorName]) {
-        console.warn("planAnchors 가 없거나", currentAnchorName, "를 찾지 못했습니다.");
-        return;
-      }
-      const worldPos = getCurrentCrosshairWorldPos();
-      if (!worldPos) return;
-
-      const anchorPlan = planAnchors[currentAnchorName]; // {x, y} (SVG 좌표)
-      // 도면 좌표계에서 anchor의 world 좌표 (root 기준)
-      const mmToM = 0.001;
-
-      // viewer_ar.html에서 쓴 것과 동일한 중심 보정을 다시 사용해야 정확하지만
-      // 데모용으로는 anchorPlan.x, y 만 사용해서 근사 정렬
-      const anchorLocal = new BABYLON.Vector3(
-        anchorPlan.x * mmToM,
-        0,
-        anchorPlan.y * mmToM
-      );
-
-      // 현재 root 기준 world 좌표로 변환
-      const anchorWorld = BABYLON.Vector3.TransformCoordinates(
-        anchorLocal,
-        root.getWorldMatrix()
-      );
-
-      // anchorWorld → worldPos 로 이동하는 평행이동 벡터
-      const delta = worldPos.subtract(anchorWorld);
-
-      root.position = root.position.add(delta);
-    }
-
-    // UI 이벤트
-    document.getElementById("anchorSelect").addEventListener("change", (e) => {
-      currentAnchorName = e.target.value;
-    });
-
-    document.getElementById("alignBtn").addEventListener("click", () => {
-      alignCurrentAnchor();
-    });
-
-    // SVG에서 A1/A2 읽어오기
-    // (plan-ar.js 안에 있는 전역 함수라고 가정)
-    loadSvgWithAnchors("assets/svg/Office_2.svg").then(res => {
-      // res = { A1:{x:..,y:..}, A2:{x:..,y:..} }
-      planAnchors = res;
-      console.log("planAnchors:", planAnchors);
-    }).catch(err => {
-      console.error("SVG anchor 로드 실패:", err);
-    });
-
-    // Babylon 시작
     createScene().then(scene => {
       engine.runRenderLoop(() => scene.render());
     });
+
     window.addEventListener("resize", () => engine.resize());
   </script>
 </body>
