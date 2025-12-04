@@ -1,0 +1,1 @@
+assets/svg/dummy.txt
