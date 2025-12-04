@@ -141,7 +141,7 @@
     let mmToM = 0.001;
     let centerX = 0;
     let centerY = 0;
-    let planAnchors = {}; // A1/A2를 Office.json에서 추출해서 저장
+    let planAnchors = {}; // A1/A2를 Office_2.json에서 추출해서 저장
 
     function setStatus(text) {
       document.getElementById("status").textContent = text || "";
@@ -167,7 +167,7 @@
       root = new BABYLON.TransformNode("root", scene);
 
       // 도면 JSON 로드
-      const data = await fetch("Office.json").then(r => r.json());
+      const data = await fetch("Office_2.json").then(r => r.json());
       const layers = data.layers;
 
       // ----- 1) 바운딩 박스 계산 -----
@@ -202,7 +202,7 @@
         return new BABYLON.Vector3(nx, 0, nz);
       }
 
-      // ----- 2) A1, A2 기준점 좌표를 Office.json에서 추출 -----
+      // ----- 2) A1, A2 기준점 좌표를 Office_2.json에서 추출 -----
       function extractAnchorFromLayer(layerName) {
         const ents = layers[layerName];
         if (!ents || ents.length === 0) return null;
@@ -314,3 +314,4 @@
   </script>
 </body>
 </html>
+
