@@ -33,7 +33,7 @@
       font-family: system-ui, sans-serif;
     }
 
-    /* + 모양 크로스헤어 */
+    /* + 모양 크로스헤어 (그대로 유지) */
     #crosshair {
       position: absolute;
       left: 50%;
@@ -62,29 +62,54 @@
       transform: translate(-50%, -50%);
     }
 
-    /* 아래 Anchor UI */
+    /* 아래 Anchor UI 패널 (조금 크게) */
     #ui-panel {
       position: absolute;
       left: 50%;
-      bottom: 12px;
+      bottom: 20px;
       transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.6);
-      padding: 6px 10px;
-      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px 14px;
+      border-radius: 10px;
       color: #fff;
-      font-size: 14px;
+      font-size: 16px;
       pointer-events: auto;
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 8px;
     }
-    #ui-panel select,
-    #ui-panel button {
-      font-size: 14px;
+    #ui-panel span.label {
+      font-weight: 500;
+    }
+    #ui-panel select {
+      font-size: 16px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #111;
+      color: #fff;
+    }
+
+    /* 동그란 정렬 버튼 */
+    #alignBtn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: #222;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      text-align: center;
+      line-height: 52px; /* 높이보다 약간 작게 */
+      padding: 0;
+    }
+    #alignBtn:active {
+      background: #444;
     }
 
     #status {
-      margin-left: 6px;
+      margin-left: 4px;
       font-size: 12px;
       opacity: 0.8;
     }
@@ -97,17 +122,18 @@
   <div id="ui-overlay" class="dom-overlay-container">
     <div id="crosshair"></div>
     <div id="ui-panel">
-      <span>Anchor:</span>
+      <span class="label">Anchor</span>
       <select id="anchorSelect">
         <option value="A1">A1</option>
         <option value="A2">A2</option>
       </select>
-      <button id="alignBtn">현재 위치에 정렬</button>
+      <!-- 동그란 버튼 안에 '정렬' 글자 -->
+      <button id="alignBtn">정렬</button>
       <span id="status"></span>
     </div>
   </div>
 
-  <!-- SVG에서 A1/A2를 읽어오는 스크립트 (이미 만들어 둔 파일) -->
+  <!-- SVG에서 A1/A2를 읽어오는 스크립트 -->
   <script src="./js/plan-ar.js"></script>
 
   <script>
@@ -120,7 +146,6 @@
     let centerX = 0;
     let centerY = 0;
 
-    // 상태 표시
     function setStatus(text) {
       document.getElementById("status").textContent = text || "";
     }
@@ -136,7 +161,7 @@
         }
       });
 
-      // DOM Overlay 활성화 (AR 모드에서도 UI 보이게)
+      // DOM Overlay 활성화
       const fm = xrHelper.baseExperience.featuresManager;
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
@@ -148,7 +173,6 @@
       const data = await fetch("Office.json").then(r => r.json());
       const layers = data.layers;
 
-      // 바운딩 박스
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
       function updateBounds(x, y) {
@@ -178,7 +202,7 @@
         return new BABYLON.Vector3(nx, 0, nz);
       }
 
-      // 선 그리기
+      // 도면 선 생성
       Object.keys(layers).forEach(layer => {
         layers[layer].forEach(e => {
           if (e.type === "LINE") {
@@ -199,7 +223,6 @@
         });
       });
 
-      // AR 진입 시 카메라 앞 2m에 도면 배치
       const initialDistance = 2.0;
       xrHelper.baseExperience.onStateChangedObservable.add((state) => {
         if (state === BABYLON.WebXRState.IN_XR) {
@@ -209,37 +232,37 @@
         }
       });
 
-      // UI 이벤트를 여기서 설정 (scene / root / centerX,centerY에 접근 가능)
+      // UI 이벤트
       const anchorSelect = document.getElementById("anchorSelect");
       const alignBtn = document.getElementById("alignBtn");
 
       alignBtn.addEventListener("click", () => {
-        const current = anchorSelect.value; // "A1" 또는 "A2"
+        const current = anchorSelect.value;           // "A1" 또는 "A2"
         const plan = window.planAnchors && window.planAnchors[current];
 
         if (!plan) {
-          setStatus(current + " 기준점 정보를 찾을 수 없음");
+          setStatus(current + " 기준점 없음");
           return;
         }
         if (!xrHelper || !root) return;
 
-        // 1) 크로스헤어가 가리키는 세계 좌표 (카메라 앞 2m)
+        // 크로스헤어가 가리키는 월드 좌표 (카메라 앞 2m)
         const cam = xrHelper.baseExperience.camera;
         const forward = cam.getForwardRay().direction;
         const targetWorld = cam.position.add(forward.scale(initialDistance));
 
-        // 2) 도면 좌표계에서 Anchor의 world 좌표
-        const anchorLocal = toWorld(plan.x, plan.y); // root 로컬 좌표
+        // 도면 기준 Anchor의 현재 월드 좌표
+        const anchorLocal = toWorld(plan.x, plan.y);
         const anchorWorld = BABYLON.Vector3.TransformCoordinates(
           anchorLocal,
           root.getWorldMatrix()
         );
 
-        // 3) anchorWorld 를 targetWorld 로 평행이동
+        // Anchor → target 으로 평행이동
         const delta = targetWorld.subtract(anchorWorld);
         root.position = root.position.add(delta);
 
-        setStatus(current + " 정렬 완료");
+        setStatus(current + " 정렬");
         setTimeout(() => setStatus(""), 1500);
       });
 
@@ -249,7 +272,6 @@
     createScene().then(scene => {
       engine.runRenderLoop(() => scene.render());
     });
-
     window.addEventListener("resize", () => engine.resize());
   </script>
 </body>
