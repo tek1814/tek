@@ -63,28 +63,38 @@
       transform: translate(-50%, -50%);
     }
 
-    /* 아래 Anchor UI 패널 */
+    /* 아래 UI 패널 (두 줄) */
     #ui-panel {
       position: absolute;
       left: 50%;
       bottom: 20px;
       transform: translateX(-50%);
       background: rgba(0, 0, 0, 0.7);
-      padding: 12px 18px;
+      padding: 10px 14px;
       border-radius: 12px;
       color: #fff;
-      font-size: 16px;
+      font-size: 14px;
       pointer-events: auto;
       display: flex;
-      align-items: center;
-      gap: 10px;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 260px;
     }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
     #ui-panel span.label {
       font-weight: 600;
+      white-space: nowrap;
     }
-    #ui-panel select {
-      font-size: 16px;
-      padding: 4px 10px;
+    #anchorSelect {
+      font-size: 14px;
+      padding: 4px 8px;
       border-radius: 6px;
       border: 1px solid #ccc;
       background: #111;
@@ -93,27 +103,42 @@
 
     /* 동그란 '선택' 버튼 */
     #selectBtn {
-      width: 64px;
-      height: 64px;
+      width: 52px;
+      height: 52px;
       border-radius: 50%;
       border: 2px solid #fff;
       background: #222;
       color: #fff;
-      font-size: 18px;
+      font-size: 14px;
       font-weight: 600;
       text-align: center;
-      line-height: 60px;
+      line-height: 48px;
       padding: 0;
     }
     #selectBtn:active {
       background: #444;
     }
 
-    #status {
-      margin-left: 4px;
+    /* 이동/회전 버튼들 */
+    .ctrl-btn {
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #222;
+      color: #fff;
       font-size: 12px;
+      min-width: 40px;
+      text-align: center;
+    }
+    .ctrl-btn:active {
+      background: #444;
+    }
+
+    #status {
+      margin-top: 2px;
+      font-size: 11px;
       opacity: 0.9;
-      max-width: 160px;
+      text-align: center;
     }
   </style>
 </head>
@@ -126,14 +151,30 @@
     <div id="crosshair"></div>
 
     <div id="ui-panel">
-      <span class="label">Anchor</span>
-      <select id="anchorSelect">
-        <option value="A1">A1</option>
-        <option value="A2">A2</option>
-      </select>
+      <!-- 1줄: Anchor 선택 + 한 점 정렬 -->
+      <div class="row">
+        <span class="label">Anchor</span>
+        <select id="anchorSelect">
+          <option value="A1">A1</option>
+          <option value="A2">A2</option>
+        </select>
+        <button id="selectBtn">선택</button>
+      </div>
 
-      <button id="selectBtn">선택</button>
-      <span id="status"></span>
+      <!-- 2줄: 회전 / 이동 버튼 -->
+      <div class="row">
+        <span class="label">회전</span>
+        <button class="ctrl-btn" id="rotLeft">◀</button>
+        <button class="ctrl-btn" id="rotRight">▶</button>
+
+        <span class="label">이동</span>
+        <button class="ctrl-btn" id="moveFwd">↑</button>
+        <button class="ctrl-btn" id="moveBack">↓</button>
+        <button class="ctrl-btn" id="moveLeft">←</button>
+        <button class="ctrl-btn" id="moveRight">→</button>
+      </div>
+
+      <div id="status"></div>
     </div>
   </div>
 
@@ -151,14 +192,6 @@
     // 도면 기준점 (A1/A2) 좌표: { A1:{x,y}, A2:{x,y}, ... }
     const planAnchors = {};
 
-    // 사용자가 선택한 현실 기준점 좌표: { A1:Vector3, A2:Vector3, ... }
-    const worldAnchors = {};
-
-    // HitTest feature와 결과
-    let xrHitTestFeature = null;
-    let lastHitPosition = null;  // 실제 바닥/벽 hit 위치
-    let hitTestAvailable = false;
-
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
     }
@@ -170,77 +203,13 @@
       return new BABYLON.Vector3(nx, 0, nz);
     }
 
-    // 크로스헤어가 가리키는 세계 좌표:
-    // 1순위: HitTest 결과
-    // 2순위: 카메라 앞 2m
+    // 크로스헤어가 가리키는 세계 좌표 (카메라 앞 2m 가정)
     function getCrosshairWorldPosition() {
-      if (hitTestAvailable && lastHitPosition) {
-        return lastHitPosition.clone();
-      }
       if (!xrHelper) return BABYLON.Vector3.Zero();
       const cam = xrHelper.baseExperience.camera;
       const forward = cam.getForwardRay().direction;
       const distance = 2.0;
       return cam.position.add(forward.scale(distance));
-    }
-
-    // 두 Anchor(name1,name2)를 이용해 회전+평행이동(스케일=1) 한 번에 적용
-    function applyTwoPointAlignment(name1, name2) {
-      const plan1 = planAnchors[name1];
-      const plan2 = planAnchors[name2];
-      const world1 = worldAnchors[name1];
-      const world2 = worldAnchors[name2];
-
-      if (!plan1 || !plan2 || !world1 || !world2) {
-        return;
-      }
-
-      // 도면(로컬) 좌표
-      const v1 = toLocal(plan1.x, plan1.y);
-      const v2 = toLocal(plan2.x, plan2.y);
-      const a1 = new BABYLON.Vector2(v1.x, v1.z);
-      const a2 = new BABYLON.Vector2(v2.x, v2.z);
-
-      // 현실(XZ 평면)
-      const b1 = new BABYLON.Vector2(world1.x, world1.z);
-      const b2 = new BABYLON.Vector2(world2.x, world2.z);
-
-      const da = a2.subtract(a1);
-      const db = b2.subtract(b1);
-      const lenA = da.length();
-      const lenB = db.length();
-
-      if (lenA < 1e-6 || lenB < 1e-6) {
-        setStatus("기준점 간 거리가 너무 짧음");
-        return;
-      }
-
-      // 스케일은 도면이 정확하다고 보고 1.0 고정
-      const s = 1.0;
-
-      // 회전(Y축)
-      const angleA = Math.atan2(da.y, da.x);
-      const angleB = Math.atan2(db.y, db.x);
-      const theta = angleB - angleA;
-      const cosT = Math.cos(theta);
-      const sinT = Math.sin(theta);
-
-      // 평행이동: b1 = R * a1 + t  (s=1)
-      const ax1 = a1.x;
-      const az1 = a1.y;
-      const rx1 = cosT * ax1 - sinT * az1;
-      const rz1 = sinT * ax1 + cosT * az1;
-
-      const tx = b1.x - rx1;
-      const tz = b1.y - rz1;
-      const ty = world1.y;  // 높이는 첫 번째 기준점의 높이
-
-      // root 변환을 한 번에 설정
-      root.scaling = new BABYLON.Vector3(1, 1, 1);
-      root.rotation = new BABYLON.Vector3(0, theta, 0);
-      root.position = new BABYLON.Vector3(tx, ty, tz);
-
-      setStatus("정합 완료 (" + name1 + ", " + name2 + ")");
     }
 
     async function createScene() {
@@ -254,45 +223,15 @@
         }
       });
 
-      const fm = xrHelper.baseExperience.featuresManager;
-
       // DOM Overlay 활성화 (AR에서도 UI 보이게)
+      const fm = xrHelper.baseExperience.featuresManager;
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
       }, undefined, false);
 
-      // HitTest 기능 활성화 시도
-      try {
-        xrHitTestFeature = fm.enableFeature(BABYLON.WebXRFeatureName.HIT_TEST, "latest");
-        if (xrHitTestFeature && xrHitTestFeature.onHitTestResultObservable) {
-          xrHitTestFeature.onHitTestResultObservable.add((results) => {
-            if (results.length) {
-              if (!lastHitPosition) {
-                lastHitPosition = new BABYLON.Vector3();
-              }
-              const hit = results[0];
-              hit.transformationMatrix.decompose(
-                undefined,
-                undefined,
-                lastHitPosition
-              );
-              hitTestAvailable = true;
-              // 상태는 너무 자주 바뀌지 않도록 간단히 표시만:
-              // setStatus("HitTest OK");
-            } else {
-              // hit이 잠시 없어져도, 마지막 성공 위치는 유지
-              // hitTestAvailable = false;  // 굳이 false로 내리지 않음
-            }
-          });
-        } else {
-          setStatus("HitTest 기능 없음, 2m fallback 사용");
-        }
-      } catch (e) {
-        console.warn("HitTest enable 실패:", e);
-        setStatus("HitTest 실패, 2m fallback 사용");
-      }
-
       root = new BABYLON.TransformNode("root", scene);
+      root.rotation = new BABYLON.Vector3(0, 0, 0);
+      root.scaling = new BABYLON.Vector3(1, 1, 1);
 
       // JSON 로드
       const data = await fetch("Office_2.json").then(r => r.json());
@@ -364,20 +303,27 @@
         });
       });
 
-      // AR 진입 시 초기 위치 = 카메라 앞 2m (대략적인 위치 표시용)
+      // AR 진입 시 초기 위치 = 카메라 앞 2m
       xrHelper.baseExperience.onStateChangedObservable.add(state => {
         if (state === BABYLON.WebXRState.IN_XR) {
           const cam = xrHelper.baseExperience.camera;
           const f = cam.getForwardRay().direction;
           root.position = cam.position.add(f.scale(2.0));
-          setStatus(hitTestAvailable ? "AR 준비됨 (HitTest 사용 가능)" : "AR 준비됨 (2m fallback)");
+          setStatus("AR 준비됨: 한 점 정렬 + 수동 회전/이동");
         }
       });
 
-      // 4) UI 이벤트: Anchor 선택 + '선택' 버튼
+      // ------- UI 이벤트 설정 -------
       const anchorSelect = document.getElementById("anchorSelect");
       const selectBtn = document.getElementById("selectBtn");
+      const rotLeftBtn = document.getElementById("rotLeft");
+      const rotRightBtn = document.getElementById("rotRight");
+      const moveFwdBtn = document.getElementById("moveFwd");
+      const moveBackBtn = document.getElementById("moveBack");
+      const moveLeftBtn = document.getElementById("moveLeft");
+      const moveRightBtn = document.getElementById("moveRight");
 
+      // 1) Anchor 한 점 정렬
       selectBtn.addEventListener("click", () => {
         const name = anchorSelect.value;   // "A1" 또는 "A2"
         const plan = planAnchors[name];
@@ -385,20 +331,77 @@
           setStatus(name + " 도면 기준점 없음");
           return;
         }
+        if (!xrHelper || !root) return;
 
-        const worldPos = getCrosshairWorldPosition();
-        worldAnchors[name] = worldPos.clone();
+        const targetWorld = getCrosshairWorldPosition();
 
-        if (hitTestAvailable && lastHitPosition) {
-          setStatus(name + " 선택 (HitTest)");
-        } else {
-          setStatus(name + " 선택 (2m fallback)");
-        }
+        const anchorLocal = toLocal(plan.x, plan.y);
+        const anchorWorldNow = BABYLON.Vector3.TransformCoordinates(
+          anchorLocal,
+          root.getWorldMatrix()
+        );
 
-        // A1, A2가 둘 다 선택된 경우 자동 정합
-        if (worldAnchors["A1"] && worldAnchors["A2"]) {
-          applyTwoPointAlignment("A1", "A2");
-        }
+        const delta = targetWorld.subtract(anchorWorldNow);
+        root.position = root.position.add(delta);
+
+        setStatus(name + " 한 점 정렬 완료");
+      });
+
+      // 2) 회전 (Y축)
+      const rotStepDeg = 2; // 2도씩 회전
+      const rotStepRad = rotStepDeg * Math.PI / 180.0;
+
+      rotLeftBtn.addEventListener("click", () => {
+        if (!root) return;
+        root.rotation.y -= rotStepRad;
+        setStatus("회전 - " + rotStepDeg + "°");
+      });
+
+      rotRightBtn.addEventListener("click", () => {
+        if (!root) return;
+        root.rotation.y += rotStepRad;
+        setStatus("회전 + " + rotStepDeg + "°");
+      });
+
+      // 3) 이동 (카메라 기준 앞/뒤/좌/우, 수평 평면에서)
+      const moveStep = 0.05; // 5cm
+
+      function moveRelative(forwardScale, rightScale) {
+        if (!xrHelper || !root) return;
+        const cam = xrHelper.baseExperience.camera;
+        const forward = cam.getForwardRay().direction.clone();
+        forward.y = 0;
+        forward.normalize();
+
+        // 오른쪽 벡터 = forward × up
+        const up = BABYLON.Vector3.Up();
+        const right = BABYLON.Vector3.Cross(forward, up);
+        right.normalize();
+
+        const moveVec = forward.scale(forwardScale * moveStep).add(
+          right.scale(rightScale * moveStep)
+        );
+        root.position = root.position.add(moveVec);
+      }
+
+      moveFwdBtn.addEventListener("click", () => {
+        moveRelative(+1, 0);
+        setStatus("앞으로 " + (moveStep * 100).toFixed(0) + "cm");
+      });
+
+      moveBackBtn.addEventListener("click", () => {
+        moveRelative(-1, 0);
+        setStatus("뒤로 " + (moveStep * 100).toFixed(0) + "cm");
+      });
+
+      moveLeftBtn.addEventListener("click", () => {
+        moveRelative(0, -1);
+        setStatus("왼쪽으로 " + (moveStep * 100).toFixed(0) + "cm");
+      });
+
+      moveRightBtn.addEventListener("click", () => {
+        moveRelative(0, +1);
+        setStatus("오른쪽으로 " + (moveStep * 100).toFixed(0) + "cm");
       });
 
       return scene;
