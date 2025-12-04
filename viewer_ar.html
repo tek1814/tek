@@ -33,7 +33,7 @@
       font-family: system-ui, sans-serif;
     }
 
-    /* + 모양 크로스헤어 (그대로 유지) */
+    /* + 모양 크로스헤어 */
     #crosshair {
       position: absolute;
       left: 50%;
@@ -101,7 +101,7 @@
       font-size: 16px;
       font-weight: 600;
       text-align: center;
-      line-height: 52px; /* 높이보다 약간 작게 */
+      line-height: 52px;
       padding: 0;
     }
     #alignBtn:active {
@@ -127,14 +127,10 @@
         <option value="A1">A1</option>
         <option value="A2">A2</option>
       </select>
-      <!-- 동그란 버튼 안에 '정렬' 글자 -->
       <button id="alignBtn">정렬</button>
       <span id="status"></span>
     </div>
   </div>
-
-  <!-- SVG에서 A1/A2를 읽어오는 스크립트 -->
-  <script src="./js/plan-ar.js"></script>
 
   <script>
     const canvas = document.getElementById("renderCanvas");
@@ -145,6 +141,7 @@
     let mmToM = 0.001;
     let centerX = 0;
     let centerY = 0;
+    let planAnchors = {}; // A1/A2를 Office.json에서 추출해서 저장
 
     function setStatus(text) {
       document.getElementById("status").textContent = text || "";
@@ -173,8 +170,10 @@
       const data = await fetch("Office.json").then(r => r.json());
       const layers = data.layers;
 
+      // ----- 1) 바운딩 박스 계산 -----
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
+
       function updateBounds(x, y) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
@@ -182,14 +181,15 @@
         if (y > maxY) maxY = y;
       }
 
-      Object.keys(layers).forEach(layer => {
-        layers[layer].forEach(e => {
+      Object.keys(layers).forEach(layerName => {
+        layers[layerName].forEach(e => {
           if (e.type === "LINE") {
             updateBounds(e.start[0], e.start[1]);
             updateBounds(e.end[0],   e.end[1]);
           } else if (e.type === "LWPOLYLINE") {
             e.points.forEach(p => updateBounds(p[0], p[1]));
           }
+          // CIRCLE 등은 바운딩박스에 크게 영향 없으니 생략해도 무방
         });
       });
 
@@ -202,9 +202,44 @@
         return new BABYLON.Vector3(nx, 0, nz);
       }
 
-      // 도면 선 생성
-      Object.keys(layers).forEach(layer => {
-        layers[layer].forEach(e => {
+      // ----- 2) A1, A2 기준점 좌표를 Office.json에서 추출 -----
+      function extractAnchorFromLayer(layerName) {
+        const ents = layers[layerName];
+        if (!ents || ents.length === 0) return null;
+
+        // CIRCLE 엔티티를 우선 찾고, 없으면 첫 엔티티 중심 사용
+        let eCircle = ents.find(e => e.type === "CIRCLE" || e.type === "circle");
+        let e = eCircle || ents[0];
+
+        // 중심 좌표 추출 (dxf_to_json 구조에 따라 다를 수 있어 넉넉하게 대응)
+        let x, y;
+        if (e.center && Array.isArray(e.center)) {
+          x = e.center[0];
+          y = e.center[1];
+        } else if (Array.isArray(e.position)) {  // 혹시 position 사용 시
+          x = e.position[0];
+          y = e.position[1];
+        } else if (typeof e.cx === "number" && typeof e.cy === "number") {
+          x = e.cx;
+          y = e.cy;
+        } else if (Array.isArray(e.points) && e.points.length > 0) {
+          x = e.points[0][0];
+          y = e.points[0][1];
+        } else {
+          return null;
+        }
+        return { x, y };
+      }
+
+      planAnchors.A1 = extractAnchorFromLayer("A1") || null;
+      planAnchors.A2 = extractAnchorFromLayer("A2") || null;
+      window.planAnchors = planAnchors;   // 디버그용 콘솔에서 확인 가능
+
+      console.log("planAnchors from JSON:", planAnchors);
+
+      // ----- 3) 도면 선 그리기 -----
+      Object.keys(layers).forEach(layerName => {
+        layers[layerName].forEach(e => {
           if (e.type === "LINE") {
             const pts = [
               toWorld(e.start[0], e.start[1]),
@@ -220,9 +255,12 @@
             line.parent = root;
             line.color = new BABYLON.Color3(1, 1, 0);
           }
+          // A1/A2 레이어의 CIRCLE은 그려도 되고, 안 그려도 되는데
+          // 필요하면 여기에서 e.type==="CIRCLE"은 무시하도록 처리 가능
         });
       });
 
+      // ----- 4) AR 진입 시 카메라 앞 2m에 전체 도면 배치 -----
       const initialDistance = 2.0;
       xrHelper.baseExperience.onStateChangedObservable.add((state) => {
         if (state === BABYLON.WebXRState.IN_XR) {
@@ -232,13 +270,13 @@
         }
       });
 
-      // UI 이벤트
+      // ----- 5) UI 이벤트 (정렬 버튼) -----
       const anchorSelect = document.getElementById("anchorSelect");
       const alignBtn = document.getElementById("alignBtn");
 
       alignBtn.addEventListener("click", () => {
-        const current = anchorSelect.value;           // "A1" 또는 "A2"
-        const plan = window.planAnchors && window.planAnchors[current];
+        const current = anchorSelect.value;  // "A1" or "A2"
+        const plan = planAnchors[current];
 
         if (!plan) {
           setStatus(current + " 기준점 없음");
@@ -246,19 +284,19 @@
         }
         if (!xrHelper || !root) return;
 
-        // 크로스헤어가 가리키는 월드 좌표 (카메라 앞 2m)
+        // (1) 크로스헤어 앞의 월드 좌표 (카메라 앞 2m)
         const cam = xrHelper.baseExperience.camera;
         const forward = cam.getForwardRay().direction;
         const targetWorld = cam.position.add(forward.scale(initialDistance));
 
-        // 도면 기준 Anchor의 현재 월드 좌표
-        const anchorLocal = toWorld(plan.x, plan.y);
+        // (2) 도면 좌표계에서 Anchor의 현재 월드 좌표
+        const anchorLocal = toWorld(plan.x, plan.y); // root 로컬
         const anchorWorld = BABYLON.Vector3.TransformCoordinates(
           anchorLocal,
           root.getWorldMatrix()
         );
 
-        // Anchor → target 으로 평행이동
+        // (3) anchorWorld → targetWorld 로 평행이동
         const delta = targetWorld.subtract(anchorWorld);
         root.position = root.position.add(delta);
 
