@@ -18,29 +18,48 @@
       touch-action: none;
       display: block;
     }
-    /* UI 오버레이 */
+    /* UI 오버레이 (항상 맨 위에) */
     #ui-overlay {
       position: fixed;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      pointer-events: none; /* 기본은 AR 제스처 방해 X */
+      pointer-events: none;    /* 기본은 AR 제스처 방해 X */
+      z-index: 9999;          /* XR 모드에서도 캔버스보다 항상 위에 오도록 */
     }
+    /* + 모양 크로스헤어 */
     #crosshair {
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      width: 24px;
-      height: 24px;
-      box-sizing: border-box;
-      border-left: 2px solid rgba(255,255,255,0.8);
-      border-right: 2px solid rgba(255,255,255,0.8);
-      border-top: 2px solid rgba(255,255,255,0.8);
-      border-bottom: 2px solid rgba(255,255,255,0.8);
-      border-radius: 4px;
+      width: 32px;
+      height: 32px;
     }
+    #crosshair::before,
+    #crosshair::after {
+      content: "";
+      position: absolute;
+      background: rgba(255, 255, 255, 0.9);
+    }
+    /* 세로선 */
+    #crosshair::before {
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 2px;
+      transform: translateX(-50%);
+    }
+    /* 가로선 */
+    #crosshair::after {
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 2px;
+      transform: translateY(-50%);
+    }
+
     #control-panel {
       position: absolute;
       bottom: 20px;
@@ -278,7 +297,7 @@
   });
   </script>
 
-  <!-- SVG에서 A1/A2 읽어오는 스크립트 (이미 만들어 둔 것) -->
+  <!-- SVG에서 A1/A2 읽어오는 스크립트 -->
   <script src="./js/plan-ar.js"></script>
 </body>
 </html>
