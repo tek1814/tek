@@ -146,15 +146,12 @@
     const mmToM = 0.001;
     let centerX = 0;
     let centerY = 0;
-    let planAnchors = {};         // A1/A2 도면 좌표(mm 기준)
-    const initialDistance = 2.0;
 
-    // 사용자가 선택한 현실 기준점들: { A1: Vector3, A2: Vector3, ... }
+    // 도면 기준점 (A1/A2) 좌표: { A1:{x,y}, A2:{x,y}, ... }
+    const planAnchors = {};
+
+    // 사용자가 선택한 현실 기준점 좌표: { A1:Vector3, A2:Vector3, ... }
     const worldAnchors = {};
-
-    // HitTest 결과에서 얻은 마지막 위치 (가능하면 이걸 사용)
-    let xrHitTest = null;
-    let lastHitPosition = null;
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
@@ -167,19 +164,16 @@
       return new BABYLON.Vector3(nx, 0, nz);
     }
 
-    // 크로스헤어 위치에 해당하는 월드 좌표를 구함
-    // 1순위: HitTest 결과(실제 바닥/평면) / 2순위: 카메라 앞 2m
+    // 크로스헤어가 가리키는 세계 좌표(카메라 앞 2m)
     function getCrosshairWorldPosition() {
-      if (lastHitPosition) {
-        return lastHitPosition.clone();
-      }
       if (!xrHelper) return BABYLON.Vector3.Zero();
       const cam = xrHelper.baseExperience.camera;
       const forward = cam.getForwardRay().direction;
-      return cam.position.add(forward.scale(initialDistance));
+      const distance = 2.0;
+      return cam.position.add(forward.scale(distance));
     }
 
-    // 두 Anchor(Ai, Aj)로부터 회전+평행이동(스케일=1)을 계산해서 root에 한 번에 적용
+    // 두 Anchor(name1,name2)를 이용해 회전+평행이동(스케일=1) 한 번에 적용
     function applyTwoPointAlignment(name1, name2) {
       const plan1 = planAnchors[name1];
       const plan2 = planAnchors[name2];
@@ -190,13 +184,13 @@
         return;
       }
 
-      // 1) 도면 기준: root 로컬 좌표(m)
+      // 도면(로컬) 좌표
       const v1 = toLocal(plan1.x, plan1.y);
       const v2 = toLocal(plan2.x, plan2.y);
       const a1 = new BABYLON.Vector2(v1.x, v1.z);
       const a2 = new BABYLON.Vector2(v2.x, v2.z);
 
-      // 2) 현실 기준: 월드 좌표(XZ 평면)
+      // 현실(XZ 평면)
       const b1 = new BABYLON.Vector2(world1.x, world1.z);
       const b2 = new BABYLON.Vector2(world2.x, world2.z);
 
@@ -220,7 +214,7 @@
       const cosT = Math.cos(theta);
       const sinT = Math.sin(theta);
 
-      // 평행이동: b1 = R * a1 + t (스케일 1 가정)
+      // 평행이동: b1 = R * a1 + t  (s=1)
       const ax1 = a1.x;
       const az1 = a1.y;
       const rx1 = cosT * ax1 - sinT * az1;
@@ -228,7 +222,7 @@
 
       const tx = b1.x - rx1;
       const tz = b1.y - rz1;
-      const ty = world1.y;   // 높이는 첫 번째 기준점의 높이
+      const ty = world1.y;  // 높이는 첫 번째 기준점의 높이
 
       // root 변환을 한 번에 설정
       root.scaling = new BABYLON.Vector3(1, 1, 1);
@@ -249,45 +243,19 @@
         }
       });
 
-      const fm = xrHelper.baseExperience.featuresManager;
-
       // DOM Overlay 활성화 (AR에서도 UI 보이게)
+      const fm = xrHelper.baseExperience.featuresManager;
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
       }, undefined, false);
 
-      // HitTest 활성화 (가능하면 실제 바닥/평면 위치 사용)
-      try {
-        xrHitTest = fm.enableFeature(BABYLON.WebXRHitTest, "latest", {
-          entityTypes: ["plane"]
-        }, true, true);
-
-        if (xrHitTest) {
-          xrHitTest.onHitTestResultObservable.add((results) => {
-            if (results.length) {
-              const hit = results[0];
-              if (!lastHitPosition) {
-                lastHitPosition = new BABYLON.Vector3();
-              }
-              hit.transformationMatrix.decompose(
-                undefined,
-                undefined,
-                lastHitPosition
-              );
-            }
-          });
-        }
-      } catch (e) {
-        console.warn("WebXRHitTest not available:", e);
-      }
-
       root = new BABYLON.TransformNode("root", scene);
 
-      // JSON 로드 (도면 + A1/A2 포함)
+      // JSON 로드
       const data = await fetch("Office_2.json").then(r => r.json());
       const layers = data.layers;
 
-      // 1) 바운딩 박스 계산
+      // 1) 바운딩 박스
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
 
@@ -318,7 +286,6 @@
       function extractAnchor(layerName) {
         const ents = layers[layerName];
         if (!ents || ents.length === 0) return null;
-
         const c = ents.find(e => e.type === "CIRCLE");
         if (c && c.center) {
           return { x: c.center[0], y: c.center[1] };
@@ -333,7 +300,6 @@
       planAnchors.A1 = extractAnchor("A1");
       planAnchors.A2 = extractAnchor("A2");
 
-      window.planAnchors = planAnchors;
       console.log("planAnchors:", planAnchors);
 
       // 3) 도면 선 그리기
@@ -360,7 +326,7 @@
         if (state === BABYLON.WebXRState.IN_XR) {
           const cam = xrHelper.baseExperience.camera;
           const f = cam.getForwardRay().direction;
-          root.position = cam.position.add(f.scale(initialDistance));
+          root.position = cam.position.add(f.scale(2.0));
         }
       });
 
@@ -377,22 +343,13 @@
         }
 
         const worldPos = getCrosshairWorldPosition();
-        worldAnchors[name] = worldPos;
+        worldAnchors[name] = worldPos.clone();
 
         setStatus(name + " 선택 완료");
 
-        // 서로 다른 Anchor가 2개 이상 선택되면 자동 정합 수행
-        const keys = Object.keys(worldAnchors);
-        if (keys.length >= 2) {
-          let n1, n2;
-          if (worldAnchors["A1"] && worldAnchors["A2"]) {
-            n1 = "A1";
-            n2 = "A2";
-          } else {
-            n1 = keys[0];
-            n2 = keys[1];
-          }
-          applyTwoPointAlignment(n1, n2);
+        // A1, A2가 둘 다 선택된 경우 자동 정합
+        if (worldAnchors["A1"] && worldAnchors["A2"]) {
+          applyTwoPointAlignment("A1", "A2");
         }
       });
 
