@@ -73,18 +73,18 @@
       padding: 12px 18px;
       border-radius: 12px;
       color: #fff;
-      font-size: 18px;
+      font-size: 16px;
       pointer-events: auto;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
     #ui-panel span.label {
       font-weight: 600;
     }
     #ui-panel select {
-      font-size: 18px;
-      padding: 6px 12px;
+      font-size: 16px;
+      padding: 4px 10px;
       border-radius: 6px;
       border: 1px solid #ccc;
       background: #111;
@@ -111,8 +111,9 @@
 
     #status {
       margin-left: 4px;
-      font-size: 14px;
-      opacity: 0.85;
+      font-size: 12px;
+      opacity: 0.9;
+      max-width: 160px;
     }
   </style>
 </head>
@@ -153,6 +154,11 @@
     // 사용자가 선택한 현실 기준점 좌표: { A1:Vector3, A2:Vector3, ... }
     const worldAnchors = {};
 
+    // HitTest feature와 결과
+    let xrHitTestFeature = null;
+    let lastHitPosition = null;  // 실제 바닥/벽 hit 위치
+    let hitTestAvailable = false;
+
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
     }
@@ -164,8 +170,13 @@
       return new BABYLON.Vector3(nx, 0, nz);
     }
 
-    // 크로스헤어가 가리키는 세계 좌표(카메라 앞 2m)
+    // 크로스헤어가 가리키는 세계 좌표:
+    // 1순위: HitTest 결과
+    // 2순위: 카메라 앞 2m
     function getCrosshairWorldPosition() {
+      if (hitTestAvailable && lastHitPosition) {
+        return lastHitPosition.clone();
+      }
       if (!xrHelper) return BABYLON.Vector3.Zero();
       const cam = xrHelper.baseExperience.camera;
       const forward = cam.getForwardRay().direction;
@@ -243,11 +254,43 @@
         }
       });
 
-      // DOM Overlay 활성화 (AR에서도 UI 보이게)
       const fm = xrHelper.baseExperience.featuresManager;
+
+      // DOM Overlay 활성화 (AR에서도 UI 보이게)
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
       }, undefined, false);
+
+      // HitTest 기능 활성화 시도
+      try {
+        xrHitTestFeature = fm.enableFeature(BABYLON.WebXRFeatureName.HIT_TEST, "latest");
+        if (xrHitTestFeature && xrHitTestFeature.onHitTestResultObservable) {
+          xrHitTestFeature.onHitTestResultObservable.add((results) => {
+            if (results.length) {
+              if (!lastHitPosition) {
+                lastHitPosition = new BABYLON.Vector3();
+              }
+              const hit = results[0];
+              hit.transformationMatrix.decompose(
+                undefined,
+                undefined,
+                lastHitPosition
+              );
+              hitTestAvailable = true;
+              // 상태는 너무 자주 바뀌지 않도록 간단히 표시만:
+              // setStatus("HitTest OK");
+            } else {
+              // hit이 잠시 없어져도, 마지막 성공 위치는 유지
+              // hitTestAvailable = false;  // 굳이 false로 내리지 않음
+            }
+          });
+        } else {
+          setStatus("HitTest 기능 없음, 2m fallback 사용");
+        }
+      } catch (e) {
+        console.warn("HitTest enable 실패:", e);
+        setStatus("HitTest 실패, 2m fallback 사용");
+      }
 
       root = new BABYLON.TransformNode("root", scene);
 
@@ -327,6 +370,7 @@
           const cam = xrHelper.baseExperience.camera;
           const f = cam.getForwardRay().direction;
           root.position = cam.position.add(f.scale(2.0));
+          setStatus(hitTestAvailable ? "AR 준비됨 (HitTest 사용 가능)" : "AR 준비됨 (2m fallback)");
         }
       });
 
@@ -345,7 +389,11 @@
         const worldPos = getCrosshairWorldPosition();
         worldAnchors[name] = worldPos.clone();
 
-        setStatus(name + " 선택 완료");
+        if (hitTestAvailable && lastHitPosition) {
+          setStatus(name + " 선택 (HitTest)");
+        } else {
+          setStatus(name + " 선택 (2m fallback)");
+        }
 
         // A1, A2가 둘 다 선택된 경우 자동 정합
         if (worldAnchors["A1"] && worldAnchors["A2"]) {
