@@ -63,7 +63,7 @@
       transform: translate(-50%, -50%);
     }
 
-    /* 아래 Anchor UI 패널 (조금 크게) */
+    /* 아래 Anchor UI 패널 */
     #ui-panel {
       position: absolute;
       left: 50%;
@@ -91,8 +91,8 @@
       color: #fff;
     }
 
-    /* 동그란 정렬 버튼 */
-    #alignBtn {
+    /* 동그란 '선택' 버튼 */
+    #selectBtn {
       width: 64px;
       height: 64px;
       border-radius: 50%;
@@ -105,7 +105,7 @@
       line-height: 60px;
       padding: 0;
     }
-    #alignBtn:active {
+    #selectBtn:active {
       background: #444;
     }
 
@@ -131,7 +131,7 @@
         <option value="A2">A2</option>
       </select>
 
-      <button id="alignBtn">정렬</button>
+      <button id="selectBtn">선택</button>
       <span id="status"></span>
     </div>
   </div>
@@ -146,22 +146,96 @@
     const mmToM = 0.001;
     let centerX = 0;
     let centerY = 0;
-    let planAnchors = {};
+    let planAnchors = {};         // A1/A2 도면 좌표(mm 기준)
     const initialDistance = 2.0;
 
-    const calibration = {
-      first: null,
-      second: null
-    };
+    // 사용자가 선택한 현실 기준점들: { A1: Vector3, A2: Vector3, ... }
+    const worldAnchors = {};
+
+    // HitTest 결과에서 얻은 마지막 위치 (가능하면 이걸 사용)
+    let xrHitTest = null;
+    let lastHitPosition = null;
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
     }
 
+    // 도면 좌표(mm)를 root 로컬 좌표(m)로 변환
     function toLocal(x, y) {
       const nx = (x - centerX) * mmToM;
       const nz = (y - centerY) * mmToM;
       return new BABYLON.Vector3(nx, 0, nz);
+    }
+
+    // 크로스헤어 위치에 해당하는 월드 좌표를 구함
+    // 1순위: HitTest 결과(실제 바닥/평면) / 2순위: 카메라 앞 2m
+    function getCrosshairWorldPosition() {
+      if (lastHitPosition) {
+        return lastHitPosition.clone();
+      }
+      if (!xrHelper) return BABYLON.Vector3.Zero();
+      const cam = xrHelper.baseExperience.camera;
+      const forward = cam.getForwardRay().direction;
+      return cam.position.add(forward.scale(initialDistance));
+    }
+
+    // 두 Anchor(Ai, Aj)로부터 회전+평행이동(스케일=1)을 계산해서 root에 한 번에 적용
+    function applyTwoPointAlignment(name1, name2) {
+      const plan1 = planAnchors[name1];
+      const plan2 = planAnchors[name2];
+      const world1 = worldAnchors[name1];
+      const world2 = worldAnchors[name2];
+
+      if (!plan1 || !plan2 || !world1 || !world2) {
+        return;
+      }
+
+      // 1) 도면 기준: root 로컬 좌표(m)
+      const v1 = toLocal(plan1.x, plan1.y);
+      const v2 = toLocal(plan2.x, plan2.y);
+      const a1 = new BABYLON.Vector2(v1.x, v1.z);
+      const a2 = new BABYLON.Vector2(v2.x, v2.z);
+
+      // 2) 현실 기준: 월드 좌표(XZ 평면)
+      const b1 = new BABYLON.Vector2(world1.x, world1.z);
+      const b2 = new BABYLON.Vector2(world2.x, world2.z);
+
+      const da = a2.subtract(a1);
+      const db = b2.subtract(b1);
+      const lenA = da.length();
+      const lenB = db.length();
+
+      if (lenA < 1e-6 || lenB < 1e-6) {
+        setStatus("기준점 간 거리가 너무 짧음");
+        return;
+      }
+
+      // 스케일은 도면이 정확하다고 보고 1.0 고정
+      const s = 1.0;
+
+      // 회전(Y축)
+      const angleA = Math.atan2(da.y, da.x);
+      const angleB = Math.atan2(db.y, db.x);
+      const theta = angleB - angleA;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      // 평행이동: b1 = R * a1 + t (스케일 1 가정)
+      const ax1 = a1.x;
+      const az1 = a1.y;
+      const rx1 = cosT * ax1 - sinT * az1;
+      const rz1 = sinT * ax1 + cosT * az1;
+
+      const tx = b1.x - rx1;
+      const tz = b1.y - rz1;
+      const ty = world1.y;   // 높이는 첫 번째 기준점의 높이
+
+      // root 변환을 한 번에 설정
+      root.scaling = new BABYLON.Vector3(1, 1, 1);
+      root.rotation = new BABYLON.Vector3(0, theta, 0);
+      root.position = new BABYLON.Vector3(tx, ty, tz);
+
+      setStatus("정합 완료 (" + name1 + ", " + name2 + ")");
     }
 
     async function createScene() {
@@ -175,21 +249,45 @@
         }
       });
 
-      // DOM Overlay 활성화
       const fm = xrHelper.baseExperience.featuresManager;
+
+      // DOM Overlay 활성화 (AR에서도 UI 보이게)
       fm.enableFeature(BABYLON.WebXRDomOverlay.Name, "latest", {
         element: "#ui-overlay"
       }, undefined, false);
 
+      // HitTest 활성화 (가능하면 실제 바닥/평면 위치 사용)
+      try {
+        xrHitTest = fm.enableFeature(BABYLON.WebXRHitTest, "latest", {
+          entityTypes: ["plane"]
+        }, true, true);
+
+        if (xrHitTest) {
+          xrHitTest.onHitTestResultObservable.add((results) => {
+            if (results.length) {
+              const hit = results[0];
+              if (!lastHitPosition) {
+                lastHitPosition = new BABYLON.Vector3();
+              }
+              hit.transformationMatrix.decompose(
+                undefined,
+                undefined,
+                lastHitPosition
+              );
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("WebXRHitTest not available:", e);
+      }
+
       root = new BABYLON.TransformNode("root", scene);
 
-      // JSON 로드 (A1/A2 포함된 파일)
+      // JSON 로드 (도면 + A1/A2 포함)
       const data = await fetch("Office_2.json").then(r => r.json());
       const layers = data.layers;
 
-      // ----------------------------
       // 1) 바운딩 박스 계산
-      // ----------------------------
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
 
@@ -200,8 +298,8 @@
         if (y > maxY) maxY = y;
       }
 
-      Object.keys(layers).forEach(layer => {
-        layers[layer].forEach(e => {
+      Object.keys(layers).forEach(layerName => {
+        layers[layerName].forEach(e => {
           if (e.type === "LINE") {
             updateBounds(e.start[0], e.start[1]);
             updateBounds(e.end[0],   e.end[1]);
@@ -216,49 +314,48 @@
       centerX = (minX + maxX) / 2;
       centerY = (minY + maxY) / 2;
 
-      // ----------------------------
       // 2) A1, A2 기준점 추출
-      // ----------------------------
-      function extract(layerName) {
+      function extractAnchor(layerName) {
         const ents = layers[layerName];
         if (!ents || ents.length === 0) return null;
 
         const c = ents.find(e => e.type === "CIRCLE");
-        if (c && c.center) return { x: c.center[0], y: c.center[1] };
-
+        if (c && c.center) {
+          return { x: c.center[0], y: c.center[1] };
+        }
         const p = ents[0];
-        if (p.points && p.points.length) return { x: p.points[0][0], y: p.points[0][1] };
+        if (p.points && p.points.length) {
+          return { x: p.points[0][0], y: p.points[0][1] };
+        }
         return null;
       }
 
-      planAnchors.A1 = extract("A1");
-      planAnchors.A2 = extract("A2");
+      planAnchors.A1 = extractAnchor("A1");
+      planAnchors.A2 = extractAnchor("A2");
 
       window.planAnchors = planAnchors;
       console.log("planAnchors:", planAnchors);
 
-      // ----------------------------
       // 3) 도면 선 그리기
-      // ----------------------------
-      Object.keys(layers).forEach(layer => {
-        layers[layer].forEach(e => {
+      Object.keys(layers).forEach(layerName => {
+        layers[layerName].forEach(e => {
           if (e.type === "LINE") {
             const p1 = toLocal(e.start[0], e.start[1]);
             const p2 = toLocal(e.end[0],   e.end[1]);
             const line = BABYLON.MeshBuilder.CreateLines("line", { points: [p1, p2] }, scene);
             line.parent = root;
-            line.color = new BABYLON.Color3(1,1,0);
+            line.color = new BABYLON.Color3(1, 1, 0);
           } else if (e.type === "LWPOLYLINE") {
             if (!e.points || e.points.length < 2) return;
             const pts = e.points.map(pt => toLocal(pt[0], pt[1]));
             const line = BABYLON.MeshBuilder.CreateLines("poly", { points: pts }, scene);
             line.parent = root;
-            line.color = new BABYLON.Color3(1,1,0);
+            line.color = new BABYLON.Color3(1, 1, 0);
           }
         });
       });
 
-      // AR 진입 시 초기 위치 = 카메라 앞 2m
+      // AR 진입 시 초기 위치 = 카메라 앞 2m (대략적인 위치 표시용)
       xrHelper.baseExperience.onStateChangedObservable.add(state => {
         if (state === BABYLON.WebXRState.IN_XR) {
           const cam = xrHelper.baseExperience.camera;
@@ -267,101 +364,36 @@
         }
       });
 
-      // ----------------------------
-      // 5) 정렬 버튼 이벤트
-      // ----------------------------
+      // 4) UI 이벤트: Anchor 선택 + '선택' 버튼
       const anchorSelect = document.getElementById("anchorSelect");
-      const alignBtn = document.getElementById("alignBtn");
+      const selectBtn = document.getElementById("selectBtn");
 
-      alignBtn.addEventListener("click", () => {
-        const name = anchorSelect.value;
+      selectBtn.addEventListener("click", () => {
+        const name = anchorSelect.value;   // "A1" 또는 "A2"
         const plan = planAnchors[name];
-
         if (!plan) {
-          setStatus(name + " 기준점 없음");
+          setStatus(name + " 도면 기준점 없음");
           return;
         }
 
-        const cam = xrHelper.baseExperience.camera;
-        const forward = cam.getForwardRay().direction;
-        const worldPos = cam.position.add(forward.scale(initialDistance));
+        const worldPos = getCrosshairWorldPosition();
+        worldAnchors[name] = worldPos;
 
-        // 하나만 있을 때는 단순 평행이동만 적용(즉시피드백)
-        const anchorLocal = toLocal(plan.x, plan.y);
-        const anchorWorldNow = BABYLON.Vector3.TransformCoordinates(
-          anchorLocal,
-          root.getWorldMatrix()
-        );
-        const delta = worldPos.subtract(anchorWorldNow);
-        root.position = root.position.add(delta);
+        setStatus(name + " 선택 완료");
 
-        // 정합용 데이터 저장
-        const entry = {
-          name,
-          plan: { x: plan.x, y: plan.y },
-          world: { x: worldPos.x, y: worldPos.y, z: worldPos.z }
-        };
-
-        if (!calibration.first || calibration.first.name === name) {
-          calibration.first = entry;
-          calibration.second = null;
-          setStatus(name + " 1점 저장");
-          return;
-        } else {
-          calibration.second = entry;
+        // 서로 다른 Anchor가 2개 이상 선택되면 자동 정합 수행
+        const keys = Object.keys(worldAnchors);
+        if (keys.length >= 2) {
+          let n1, n2;
+          if (worldAnchors["A1"] && worldAnchors["A2"]) {
+            n1 = "A1";
+            n2 = "A2";
+          } else {
+            n1 = keys[0];
+            n2 = keys[1];
+          }
+          applyTwoPointAlignment(n1, n2);
         }
-
-        // 이제 두 점(A1,A2 또는 A2,A1 모두 OK)
-        const p1 = calibration.first;
-        const p2 = calibration.second;
-
-        // 도면 로컬 좌표(m)
-        const v1 = toLocal(p1.plan.x, p1.plan.y);
-        const v2 = toLocal(p2.plan.x, p2.plan.y);
-        const a1 = new BABYLON.Vector2(v1.x, v1.z);
-        const a2 = new BABYLON.Vector2(v2.x, v2.z);
-
-        // 현실 월드 좌표(XZ 기준)
-        const b1 = new BABYLON.Vector2(p1.world.x, p1.world.z);
-        const b2 = new BABYLON.Vector2(p2.world.x, p2.world.z);
-
-        // 벡터
-        const da = a2.subtract(a1);
-        const db = b2.subtract(b1);
-        const lenA = da.length();
-        const lenB = db.length();
-
-        if (lenA < 1e-6 || lenB < 1e-6) {
-          setStatus("기준점 간 거리가 너무 짧음");
-          return;
-        }
-
-        // 스케일 = 1 고정 (여기에서 문제 해결됨)
-        const s = 1.0;
-
-        // 회전(Y축)
-        const angleA = Math.atan2(da.y, da.x);
-        const angleB = Math.atan2(db.y, db.x);
-        const theta = angleB - angleA;
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
-
-        // 평행이동 : b1 = R * a1 + t
-        const ax1 = a1.x;
-        const az1 = a1.y;
-        const rx1 = cosT * ax1 - sinT * az1;
-        const rz1 = sinT * ax1 + cosT * az1;
-
-        const tx = b1.x - rx1;
-        const tz = b1.y - rz1;
-        const ty = p1.world.y;
-
-        // 최종 적용
-        root.scaling = new BABYLON.Vector3(1, 1, 1);
-        root.rotation = new BABYLON.Vector3(0, theta, 0);
-        root.position = new BABYLON.Vector3(tx, ty, tz);
-
-        setStatus("두 점 정합 완료 (" + p1.name + ", " + p2.name + ")");
       });
 
       return scene;
