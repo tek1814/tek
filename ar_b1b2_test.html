@@ -21,30 +21,75 @@
       background: rgba(0, 0, 0, 0.5);
       border-radius: 4px;
       font-size: 14px;
-      z-index: 10;
+      z-index: 20;
       pointer-events: none;
       white-space: nowrap;
     }
     #help {
       position: fixed;
-      bottom: 8px;
+      bottom: 60px;
       left: 50%;
       transform: translateX(-50%);
       padding: 6px 10px;
       background: rgba(0, 0, 0, 0.4);
       border-radius: 4px;
       font-size: 12px;
-      z-index: 10;
+      z-index: 20;
       pointer-events: none;
       white-space: nowrap;
+    }
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 30px;
+      height: 30px;
+      margin-left: -15px;
+      margin-top: -15px;
+      z-index: 15;
+      pointer-events: none;
+    }
+    #crosshair:before,
+    #crosshair:after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,0.9);
+    }
+    #crosshair:before {
+      left: 50%;
+      top: 0;
+      width: 2px;
+      height: 100%;
+      transform: translateX(-50%);
+    }
+    #crosshair:after {
+      top: 50%;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      transform: translateY(-50%);
+    }
+    #selectBtn {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 20px;
+      font-size: 14px;
+      border-radius: 20px;
+      border: none;
+      background: rgba(0, 122, 255, 0.9);
+      color: #fff;
+      z-index: 25;
     }
   </style>
 </head>
 <body>
   <div id="info">AR 준비 중...</div>
-  <div id="help">바닥을 인식한 후: 첫 탭 = B1, 두 번째 탭 = B2</div>
+  <div id="help">바닥 인식 후: 링을 B1/B2 위치에 맞추고 아래 버튼으로 선택</div>
+  <div id="crosshair"></div>
+  <button id="selectBtn">선택 (B1/B2)</button>
 
-  <!-- Three.js + ARButton (CDN) -->
   <script type="module">
     import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
     import { ARButton } from "https://unpkg.com/three@0.161.0/examples/jsm/webxr/ARButton.js";
@@ -56,6 +101,7 @@
 
     const info = document.getElementById("info");
     const help = document.getElementById("help");
+    const selectBtn = document.getElementById("selectBtn");
 
     // 평면에 붙어다니는 reticle (동그라미)
     let reticle;
@@ -84,7 +130,7 @@
         20
       );
 
-      // 살짝 Ambient Light
+      // Ambient Light
       const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
@@ -99,19 +145,18 @@
       reticle.visible = false;
       scene.add(reticle);
 
-      // ARButton (히트테스트 기능 요청)
+      // ARButton (hit-test 요청)
       const button = ARButton.createButton(renderer, {
         requiredFeatures: ["hit-test"],
         optionalFeatures: ["local-floor", "bounded-floor"]
       });
       document.body.appendChild(button);
 
-      // 세션 시작 이벤트
       renderer.xr.addEventListener("sessionstart", onSessionStart);
       renderer.xr.addEventListener("sessionend", onSessionEnd);
 
-      // 화면 탭 이벤트 → B1/B2 지정
-      renderer.domElement.addEventListener("click", onClick);
+      // 버튼으로 B1/B2 선택
+      selectBtn.addEventListener("click", onSelectPoint);
 
       window.addEventListener("resize", onWindowResize);
     }
@@ -127,13 +172,14 @@
 
       info.textContent = "바닥을 향해 폰을 움직여 평면을 인식하세요...";
 
-      // Reference Space
       xrRefSpace = await session.requestReferenceSpace("local-floor").catch(() =>
         session.requestReferenceSpace("local")
       );
 
       hitTestSourceRequested = false;
       hitTestSource = null;
+      B1 = null;
+      B2 = null;
     }
 
     function onSessionEnd() {
@@ -148,17 +194,13 @@
       const session = renderer.xr.getSession();
       if (!session) return;
 
-      const viewerRefSpacePromise = session.requestReferenceSpace("viewer");
-      viewerRefSpacePromise.then((viewerRefSpace) => {
-        if (!viewerRefSpace) return;
+      session.requestReferenceSpace("viewer").then((viewerRefSpace) => {
         session
           .requestHitTestSource({ space: viewerRefSpace })
           .then((source) => {
             hitTestSource = source;
           })
-          .catch((err) => {
-            console.error("requestHitTestSource error:", err);
-          });
+          .catch((err) => console.error("requestHitTestSource error:", err));
       });
 
       session.addEventListener("end", () => {
@@ -169,8 +211,8 @@
       hitTestSourceRequested = true;
     }
 
-    function onClick() {
-      // reticle이 평면 상에 보이는 상태에서만 B1/B2 지정
+    function onSelectPoint() {
+      // reticle이 평면 위에 있을 때만 선택 가능
       if (!reticle.visible) {
         info.textContent = "아직 평면이 인식되지 않았습니다.";
         return;
@@ -182,9 +224,10 @@
       if (!B1) {
         B1 = pos.clone();
         B2 = null;
-        info.textContent = `B1 지정 완료: (${B1.x.toFixed(2)}, ${B1.y.toFixed(
+        info.textContent = `B1 지정: (${B1.x.toFixed(2)}, ${B1.y.toFixed(
           2
         )}, ${B1.z.toFixed(2)}) m`;
+        console.log("B1 set:", B1);
       } else if (!B2) {
         B2 = pos.clone();
         const dx = B2.x - B1.x;
@@ -194,14 +237,17 @@
 
         info.textContent = `B1–B2 거리: ${dist.toFixed(
           3
-        )} m (B1 재지정하려면 다시 탭)`;
+        )} m (다시 누르면 B1 재지정)`;
+        console.log("B2 set:", B2);
+        console.log("B1–B2 distance (m):", dist);
       } else {
-        // 이미 B1, B2 다 있는 상태에서 탭 → B1 다시 지정
+        // 이미 B1,B2 모두 있는 상태에서 다시 누르면 B1 재설정
         B1 = pos.clone();
         B2 = null;
         info.textContent = `B1 다시 지정: (${B1.x.toFixed(
           2
         )}, ${B1.y.toFixed(2)}, ${B1.z.toFixed(2)}) m`;
+        console.log("B1 reset:", B1);
       }
     }
 
@@ -216,7 +262,6 @@
         return;
       }
 
-      // HitTestSource 없으면 한 번만 요청
       if (!hitTestSourceRequested) {
         requestHitTestSource(frame);
       }
@@ -237,9 +282,8 @@
               reticle.scale
             );
 
-            // 처음 평면 잡힌 순간 안내 문구
             if (info.textContent.startsWith("바닥을 향해")) {
-              info.textContent = "첫 탭 = B1, 두 번째 탭 = B2";
+              info.textContent = "링을 위치시키고 [선택]으로 B1/B2 지정";
             }
           }
         } else {
