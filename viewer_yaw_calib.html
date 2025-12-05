@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>DXF WebAR – Yaw Calib (A1/A2 – B1/B2)</title>
+  <title>AR Yaw Calib (A1/A2 – B1/B2)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
   <style>
@@ -23,7 +23,6 @@
       pointer-events: none;
     }
 
-    /* 상단 안내 문구 */
     #top-bar {
       position: absolute;
       top: env(safe-area-inset-top, 8px);
@@ -35,7 +34,18 @@
       pointer-events: none;
     }
 
-    /* 하단 버튼 영역 */
+    #center-dot {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      pointer-events: none;
+    }
+
     #bottom-bar {
       position: absolute;
       bottom: env(safe-area-inset-bottom, 12px);
@@ -55,9 +65,19 @@
       opacity: 0.9;
     }
 
-    .btn-row {
+    #controls {
       display: flex;
       gap: 8px;
+      align-items: center;
+    }
+
+    select {
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      background: rgba(0, 0, 0, 0.4);
+      color: #fff;
+      font-size: 12px;
     }
 
     button {
@@ -73,32 +93,8 @@
     }
 
     button:disabled {
-      opacity: 0.4;
+      opacity: 0.5;
       box-shadow: none;
-    }
-
-    /* 중앙 레티클 – 아이패드 Measure 스타일 (원 + 점) */
-    #reticle-2d {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.9);
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-    }
-
-    #reticle-2d-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.95);
     }
 
     #status-label {
@@ -106,35 +102,45 @@
       opacity: 0.9;
       text-align: center;
     }
+
+    #result-label {
+      font-size: 11px;
+      opacity: 0.9;
+      text-align: center;
+      max-width: 95vw;
+      white-space: pre-line;
+    }
   </style>
 </head>
 <body>
-  <!-- three.js가 그릴 캔버스는 JS에서 생성 -->
   <div id="overlay-ui">
-    <div id="top-bar">AR Yaw 보정: A1/A2 ↔ B1/B2</div>
-
-    <div id="reticle-2d">
-      <div id="reticle-2d-dot"></div>
-    </div>
+    <div id="top-bar">A1/A2 ↔ B1/B2 Yaw 보정 테스트</div>
+    <!-- 화면 중앙 고정 점 -->
+    <div id="center-dot"></div>
 
     <div id="bottom-bar">
       <div id="instruction">
-        바닥 인식 후, 레티클을 B1 위치에 맞추고 버튼을 눌러 B1/B2를 선택합니다.
+        처음에는 [START AR]를 눌러 AR을 시작합니다.<br/>
+        AR 시작 후에는 왼쪽에서 B1/B2를 고르고 [선택]으로 찍으세요.
       </div>
-      <div class="btn-row">
-        <button id="btn-start">START AR</button>
-        <button id="btn-b1" disabled>선택 B1</button>
-        <button id="btn-b2" disabled>선택 B2</button>
+
+      <div id="controls">
+        <select id="point-select" disabled>
+          <option value="B1">B1</option>
+          <option value="B2">B2</option>
+        </select>
+        <button id="main-button">START AR</button>
       </div>
+
       <div id="status-label">상태: 준비 완료</div>
+      <div id="result-label"></div>
     </div>
   </div>
 
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js";
-    import { ARButton } from "https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/webxr/ARButton.js";
 
-    // ---------- 기본 three.js 세팅 ----------
+    // ---------------- 기본 three.js / WebXR 세팅 ----------------
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
 
@@ -144,245 +150,204 @@
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    // 간단한 조명
     const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
     scene.add(light);
 
-    // ---------- 바닥 hit-test용 3D 레티클 ----------
+    // 바닥 hit-test용 3D 레티클 (원)
     const reticle3D = new THREE.Mesh(
       new THREE.RingGeometry(0.03, 0.035, 32),
       new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
-    reticle3D.rotation.x = -Math.PI / 2; // 바닥에 눕혀서 보이도록
+    reticle3D.rotation.x = -Math.PI / 2;
     reticle3D.visible = false;
     scene.add(reticle3D);
 
-    // ---------- JSON에서 도면 + A1/A2 읽기 ----------
+    // ---------------- 도면 기준점 A1 / A2 (mm → m 상수) ----------------
+    // 최신 Office_2.json 기준:
+    // A2 ≈ (0, 0), A1 ≈ (1500, 0)  (단위: mm)
     const MM_TO_M = 0.001;
-    let a1Plan = null; // THREE.Vector3 (도면 좌표계, mm → m 변환 후)
-    let a2Plan = null;
-    let planGroup = new THREE.Group();
-    scene.add(planGroup);
 
-    async function loadPlanFromJson() {
-      const response = await fetch("./Office_2.json");
-      const data = await response.json();
+    const A1_PLAN = new THREE.Vector2(1500 * MM_TO_M, 0 * MM_TO_M); // (1.5m, 0)
+    const A2_PLAN = new THREE.Vector2(0 * MM_TO_M,    0 * MM_TO_M); // (0, 0)
 
-      // data 구조: { ..., "A1":[{type:"CIRCLE", center:[x,y], radius:..}], "A2":[{...}], ... }
-      const a1Circle = data.A1 && data.A1[0];
-      const a2Circle = data.A2 && data.A2[0];
-
-      if (!a1Circle || !a2Circle) {
-        console.error("A1/A2 정보를 JSON에서 찾을 수 없습니다.");
-        return;
-      }
-
-      // 도면 좌표계(X,Y)를 three.js XZ 평면으로 투영 (Y는 -Z 방향으로 사용)
-      const [ax1, ay1] = a1Circle.center;
-      const [ax2, ay2] = a2Circle.center;
-
-      a1Plan = new THREE.Vector3(ax1 * MM_TO_M, 0, -ay1 * MM_TO_M);
-      a2Plan = new THREE.Vector3(ax2 * MM_TO_M, 0, -ay2 * MM_TO_M);
-
-      console.log("A1 (plan, m):", a1Plan);
-      console.log("A2 (plan, m):", a2Plan);
-
-      // 도면 선 그리기
-      const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff });
-      const layers = data.layers || data; // 변환 스크립트에 따라 구조가 다를 수 있어서 fallback
-
-      function addLine(x1, y1, x2, y2) {
-        const geom = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(x1 * MM_TO_M, 0, -y1 * MM_TO_M),
-          new THREE.Vector3(x2 * MM_TO_M, 0, -y2 * MM_TO_M),
-        ]);
-        const line = new THREE.Line(geom, lineMaterial);
-        planGroup.add(line);
-      }
-
-      // 가장 일반적인 구조: data.layers["A-FLOR"], "I-WALL" 등
-      if (data["A-FLOR"] || data["I-WALL"] || data["A-BNDY"]) {
-        const keys = Object.keys(data);
-        keys.forEach((key) => {
-          if (key === "A1" || key === "A2") return; // 기준점 레이어는 제외
-          const ents = data[key];
-          if (!Array.isArray(ents)) return;
-
-          ents.forEach((ent) => {
-            if (ent.type === "LINE") {
-              const [sx, sy] = ent.start;
-              const [ex, ey] = ent.end;
-              addLine(sx, sy, ex, ey);
-            } else if (ent.type === "LWPOLYLINE" && Array.isArray(ent.points)) {
-              for (let i = 0; i < ent.points.length - 1; i++) {
-                const [x1, y1] = ent.points[i];
-                const [x2, y2] = ent.points[i + 1];
-                addLine(x1, y1, x2, y2);
-              }
-            }
-          });
-        });
-      } else if (layers && typeof layers === "object") {
-        // 혹시 layers 속성 안에 들어있는 경우
-        Object.values(layers).forEach((ents) => {
-          if (!Array.isArray(ents)) return;
-          ents.forEach((ent) => {
-            if (ent.type === "LINE") {
-              const [sx, sy] = ent.start;
-              const [ex, ey] = ent.end;
-              addLine(sx, sy, ex, ey);
-            } else if (ent.type === "LWPOLYLINE" && Array.isArray(ent.points)) {
-              for (let i = 0; i < ent.points.length - 1; i++) {
-                const [x1, y1] = ent.points[i];
-                const [x2, y2] = ent.points[i + 1];
-                addLine(x1, y1, x2, y2);
-              }
-            }
-          });
-        });
-      }
-
-      // 초기에는 도면을 카메라 앞쪽 바닥에 그냥 눕혀둠 (yaw = 0)
-      planGroup.rotation.set(-Math.PI / 2, 0, 0); // X축 회전: 도면 XY → XZ
-      planGroup.position.set(0, -1.0, -1.5); // 임시 위치 (사용자가 B1/B2 찍으면 다시 맞춤)
-    }
-
-    loadPlanFromJson().catch(console.error);
-
-    // ---------- AR / hit-test ----------
-    let xrHitTestSource = null;
+    // ---------------- AR / Hit-test 상태 ----------------
+    let xrSession = null;
     let xrRefSpace = null;
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
 
-    function onSessionStart(session) {
-      session.addEventListener("end", onSessionEnd);
+    // B1 / B2 월드 좌표 (m)
+    let B1_world = null;
+    let B2_world = null;
 
-      const viewerSpacePromise = session.requestReferenceSpace("viewer");
-      const refSpacePromise = session.requestReferenceSpace("local");
-
-      Promise.all([viewerSpacePromise, refSpacePromise]).then(([viewerSpace, refSpace]) => {
-        xrRefSpace = refSpace;
-        session
-          .requestHitTestSource({ space: viewerSpace })
-          .then((source) => {
-            xrHitTestSource = source;
-          })
-          .catch((err) => console.error("HitTestSource error:", err));
-      });
-    }
-
-    function onSessionEnd() {
-      xrHitTestSource = null;
-      xrRefSpace = null;
-      reticle3D.visible = false;
-      setStatus("AR 세션 종료");
-    }
-
-    // ---------- B1/B2 선택 및 yaw 고정 ----------
-    let b1World = null;
-    let b2World = null;
-
-    const btnStart = document.getElementById("btn-start");
-    const btnB1 = document.getElementById("btn-b1");
-    const btnB2 = document.getElementById("btn-b2");
+    const pointSelect = document.getElementById("point-select");
+    const mainButton = document.getElementById("main-button");
     const statusLabel = document.getElementById("status-label");
+    const resultLabel = document.getElementById("result-label");
 
     function setStatus(msg) {
       statusLabel.textContent = "상태: " + msg;
-      console.log(msg);
+      console.log("[STATUS]", msg);
     }
 
-    btnStart.addEventListener("click", () => {
+    function setResult(msg) {
+      resultLabel.textContent = msg;
+      console.log("[RESULT]\n" + msg);
+    }
+
+    // ---------------- START AR / 선택 버튼 ----------------
+    let isARStarted = false; // 한 번만 START AR 용도로 사용
+
+    mainButton.addEventListener("click", () => {
+      if (!isARStarted) {
+        startAR();
+      } else {
+        selectCurrentPoint();
+      }
+    });
+
+    function startAR() {
+      if (!navigator.xr) {
+        setStatus("WebXR 지원 안함");
+        return;
+      }
+
       const sessionInit = {
         requiredFeatures: ["hit-test"],
-        optionalFeatures: ["dom-overlay", "plane-detection"],
-        domOverlay: { root: document.body },
+        optionalFeatures: ["dom-overlay"],
+        domOverlay: { root: document.body }
       };
 
-      navigator.xr
-        .requestSession("immersive-ar", sessionInit)
+      navigator.xr.requestSession("immersive-ar", sessionInit)
         .then((session) => {
+          xrSession = session;
           renderer.xr.setReferenceSpaceType("local");
           renderer.xr.setSession(session);
-          onSessionStart(session);
-          btnStart.disabled = true;
-          btnB1.disabled = false;
-          setStatus("바닥을 인식 중… 레티클을 B1 위치에 맞추고 [선택 B1]");
+
+          session.addEventListener("end", () => {
+            xrSession = null;
+            xrRefSpace = null;
+            hitTestSource = null;
+            hitTestSourceRequested = false;
+            reticle3D.visible = false;
+            isARStarted = false;
+            mainButton.textContent = "START AR";
+            pointSelect.disabled = true;
+            setStatus("AR 세션 종료");
+          });
+
+          // reference space
+          session.requestReferenceSpace("local").then((refSpace) => {
+            xrRefSpace = refSpace;
+          });
+
+          isARStarted = true;
+          mainButton.textContent = "선택";
+          pointSelect.disabled = false;
+          setStatus("바닥을 향해 움직여 레티클이 보이게 한 뒤, B1/B2를 선택하세요.");
         })
         .catch((err) => {
           console.error(err);
-          setStatus("AR 세션을 시작할 수 없습니다.");
+          setStatus("AR 세션 시작 실패");
         });
-    });
+    }
 
-    btnB1.addEventListener("click", () => {
+    function selectCurrentPoint() {
       if (!reticle3D.visible) {
-        setStatus("바닥 hit-test가 아직 없습니다. 카메라를 바닥으로 향하게 해 보세요.");
-        return;
-      }
-      b1World = reticle3D.position.clone();
-      btnB1.disabled = true;
-      btnB2.disabled = false;
-      setStatus("B1 저장 완료. 레티클을 B2 위치에 맞추고 [선택 B2]");
-      console.log("B1 world:", b1World);
-    });
-
-    btnB2.addEventListener("click", () => {
-      if (!reticle3D.visible) {
-        setStatus("바닥 hit-test가 아직 없습니다. 카메라를 바닥으로 향하게 해 보세요.");
-        return;
-      }
-      b2World = reticle3D.position.clone();
-      btnB2.disabled = true;
-      setStatus("B2 저장 완료. 도면 yaw를 보정합니다…");
-      console.log("B2 world:", b2World);
-
-      if (!b1World || !b2World || !a1Plan || !a2Plan) {
-        console.warn("보정에 필요한 정보가 부족합니다.");
-        setStatus("보정 실패: 데이터 부족");
+        setStatus("바닥 Hit-test가 아직 없습니다. 카메라를 바닥으로 움직여 보세요.");
         return;
       }
 
-      // 1) 월드에서 B1→B2 벡터의 yaw
-      const bVec = new THREE.Vector3().subVectors(b2World, b1World);
-      const yawWorld = Math.atan2(bVec.x, bVec.z); // z-forward 기준
+      const pos = reticle3D.position.clone();
+      const target = pointSelect.value; // "B1" 또는 "B2"
 
-      // 2) 도면에서 A1→A2 벡터의 yaw (이미 XZ 평면에 있음)
-      const aVec = new THREE.Vector3().subVectors(a2Plan, a1Plan);
-      const yawPlan = Math.atan2(aVec.x, aVec.z);
+      if (target === "B1") {
+        B1_world = pos;
+        setStatus(`B1 저장: (${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`);
+      } else if (target === "B2") {
+        B2_world = pos;
+        setStatus(`B2 저장: (${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`);
+      }
 
-      // 3) yaw 차이
-      const deltaYaw = yawWorld - yawPlan;
+      // 두 점 모두 준비되면 계산
+      if (B1_world && B2_world) {
+        computeYawAndScale();
+      }
+    }
 
-      console.log("yawWorld(rad):", yawWorld, " yawPlan(rad):", yawPlan, " deltaYaw(rad):", deltaYaw);
-      console.log("B1-B2 거리(m):", bVec.length(), " A1-A2 거리(m):", aVec.length());
+    // ---------------- yaw 및 스케일 계산 (전략1 + yaw-only) ----------------
+    function computeYawAndScale() {
+      // 도면 A1→A2 (2D, XY 평면)
+      const vPlan = new THREE.Vector2(
+        A2_PLAN.x - A1_PLAN.x,
+        A2_PLAN.y - A1_PLAN.y
+      );
+      const lenPlan = vPlan.length();
 
-      // 4) yaw만 적용 (roll, pitch 고정)
-      planGroup.rotation.set(-Math.PI / 2, deltaYaw, 0);
+      // 월드 B1→B2 (수평면 XZ에 투영)
+      const vWorld2D = new THREE.Vector2(
+        B2_world.x - B1_world.x,
+        B2_world.z - B1_world.z
+      );
+      const lenWorld = vWorld2D.length();
 
-      // 5) A1이 B1 위치에 정확히 오도록 평행이동
-      //    - A1의 도면 좌표를 현재 회전 값에 맞게 월드 기준으로 보정한 뒤,
-      //      B1 위치에서 그 값을 빼면 됨.
-      const a1Rotated = a1Plan.clone();
-      const yawMatrix = new THREE.Matrix4().makeRotationY(deltaYaw);
-      a1Rotated.applyMatrix4(yawMatrix);
+      if (lenPlan === 0 || lenWorld === 0) {
+        setResult("길이가 0인 벡터가 있어서 계산할 수 없습니다.");
+        return;
+      }
 
-      const newPosition = new THREE.Vector3().subVectors(b1World, a1Rotated);
-      planGroup.position.copy(newPosition);
+      const scale = lenWorld / lenPlan; // 도면 길이 → 실세계 길이 비율
 
-      setStatus("보정 완료 (yaw only). 콘솔에서 수치를 확인할 수 있습니다.");
-    });
+      const anglePlan = Math.atan2(vPlan.y, vPlan.x);
+      const angleWorld = Math.atan2(vWorld2D.y, vWorld2D.x);
+      const yaw = angleWorld - anglePlan; // rad
 
-    // ---------- 렌더 루프 ----------
-    renderer.setAnimationLoop((timestamp, frame) => {
-      if (frame && xrHitTestSource && xrRefSpace) {
-        const hitTestResults = frame.getHitTestResults(xrHitTestSource);
-        if (hitTestResults.length > 0) {
-          const hit = hitTestResults[0];
+      const yawDeg = yaw * 180 / Math.PI;
+
+      const msg =
+        `A1 = (${A1_PLAN.x.toFixed(3)}, ${A1_PLAN.y.toFixed(3)}) m\n` +
+        `A2 = (${A2_PLAN.x.toFixed(3)}, ${A2_PLAN.y.toFixed(3)}) m\n` +
+        `도면 A1–A2 길이 = ${lenPlan.toFixed(3)} m\n\n` +
+        `B1 = (${B1_world.x.toFixed(3)}, ${B1_world.y.toFixed(3)}, ${B1_world.z.toFixed(3)}) m\n` +
+        `B2 = (${B2_world.x.toFixed(3)}, ${B2_world.y.toFixed(3)}, ${B2_world.z.toFixed(3)}) m\n` +
+        `실세계 B1–B2 길이 = ${lenWorld.toFixed(3)} m\n\n` +
+        `스케일(scale) = ${scale.toFixed(5)}\n` +
+        `Yaw(라디안) = ${yaw.toFixed(5)}\n` +
+        `Yaw(도) = ${yawDeg.toFixed(3)}°`;
+
+      setResult(msg);
+      setStatus("계산 완료. 위 결과를 도면 정합에 사용할 수 있습니다.");
+    }
+
+    // ---------------- 렌더 루프 / hit-test ----------------
+    renderer.setAnimationLoop((time, frame) => {
+      const session = renderer.xr.getSession();
+      if (!session || !frame || !xrRefSpace) {
+        renderer.render(scene, camera);
+        return;
+      }
+
+      if (!hitTestSourceRequested) {
+        session.requestReferenceSpace("viewer").then((viewerSpace) => {
+          session
+            .requestHitTestSource({ space: viewerSpace })
+            .then((source) => {
+              hitTestSource = source;
+            })
+            .catch((err) => console.error("HitTestSource 오류:", err));
+        });
+        hitTestSourceRequested = true;
+      }
+
+      if (hitTestSource && xrRefSpace) {
+        const hits = frame.getHitTestResults(hitTestSource);
+        if (hits.length > 0) {
+          const hit = hits[0];
           const pose = hit.getPose(xrRefSpace);
           if (pose) {
-            const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+            const mat = new THREE.Matrix4().fromArray(pose.transform.matrix);
             reticle3D.visible = true;
-            reticle3D.position.setFromMatrixPosition(matrix);
+            reticle3D.position.setFromMatrixPosition(mat);
           }
         } else {
           reticle3D.visible = false;
@@ -392,7 +357,6 @@
       renderer.render(scene, camera);
     });
 
-    // ---------- 리사이즈 ----------
     window.addEventListener("resize", () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
