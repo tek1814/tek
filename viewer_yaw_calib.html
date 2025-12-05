@@ -163,14 +163,16 @@
     reticle3D.visible = false;
     scene.add(reticle3D);
 
-    // ---------- 도면/측정 단위 ----------
-    const MM_TO_M = 0.001;  // 도면은 mm, WebXR은 m
+    // ---------- 단위 및 도면 기준점 ----------
+    const MM_TO_M = 0.001;  // 도면: mm, WebXR: m
 
-    // A1/A2 (도면상의 기준점) – m 단위로 저장
-    let A1_PLAN_M = null; // THREE.Vector2
-    let A2_PLAN_M = null;
+    // A1/A2 (도면 기준점) – 2D(m) + 3D(m, XZ)
+    let A1_PLAN_2D = null;   // THREE.Vector2(x_m, y_m) – 원래 DXF 평면 좌표
+    let A2_PLAN_2D = null;
+    let A1_PLAN_3D = null;   // THREE.Vector3(x_m, 0, z_m = -y_m)
+    let A2_PLAN_3D = null;
 
-    // 도면 선들 (Office_2.json에서 읽음)
+    // 도면 선분 (Office_2.json에서 읽어옴, mm 단위)
     const planSegments = []; // {x1,y1,x2,y2} in mm
     const planGroup = new THREE.Group();
     scene.add(planGroup);
@@ -184,17 +186,23 @@
           ? json.layers
           : json;
 
-        // A1/A2 먼저 추출
+        // A1/A2 추출
         if (layersObj.A1 && layersObj.A1[0] && layersObj.A1[0].center) {
-          const [x, y] = layersObj.A1[0].center;
-          A1_PLAN_M = new THREE.Vector2(x * MM_TO_M, y * MM_TO_M);
+          const [x_mm, y_mm] = layersObj.A1[0].center;
+          const x_m = x_mm * MM_TO_M;
+          const y_m = y_mm * MM_TO_M;
+          A1_PLAN_2D = new THREE.Vector2(x_m, y_m);
+          A1_PLAN_3D = new THREE.Vector3(x_m, 0, -y_m); // z = -y
         }
         if (layersObj.A2 && layersObj.A2[0] && layersObj.A2[0].center) {
-          const [x, y] = layersObj.A2[0].center;
-          A2_PLAN_M = new THREE.Vector2(x * MM_TO_M, y * MM_TO_M);
+          const [x_mm, y_mm] = layersObj.A2[0].center;
+          const x_m = x_mm * MM_TO_M;
+          const y_m = y_mm * MM_TO_M;
+          A2_PLAN_2D = new THREE.Vector2(x_m, y_m);
+          A2_PLAN_3D = new THREE.Vector3(x_m, 0, -y_m);
         }
 
-        // LINE / LWPOLYLINE 추출
+        // 도면 선분 추출
         for (const [layerName, ents] of Object.entries(layersObj)) {
           if (!Array.isArray(ents)) continue;
           if (layerName === "A1" || layerName === "A2") continue;
@@ -214,10 +222,10 @@
           }
         }
 
-        if (!A1_PLAN_M || !A2_PLAN_M) {
+        if (!A1_PLAN_3D || !A2_PLAN_3D) {
           setStatus("A1/A2 기준점을 JSON에서 찾지 못했습니다.");
         } else {
-          console.log("A1(m):", A1_PLAN_M, "A2(m):", A2_PLAN_M);
+          console.log("A1_3D(m):", A1_PLAN_3D, "A2_3D(m):", A2_PLAN_3D);
           setStatus("도면 JSON 로드 완료. AR에서 B1/B2를 찍어 보정하세요.");
         }
       } catch (e) {
@@ -237,13 +245,16 @@
     let B1_world = null;
     let B2_world = null;
 
-    // 첫 번째로 선택된 현실 점(B1/B2)이 무엇인지 → 그에 대응하는 A1/A2가 anchor
+    // 첫 번째로 선택된 현실 점(B1/B2)
     let firstSelectedLabel = null; // "B1" or "B2"
 
     // 최종 변환값 (도면 → 월드)
-    let gScale = 1.0;          // 도면 스케일 (m 단위에서)
-    let gYaw = 0.0;            // yaw (라디안)
-    let gTrans = new THREE.Vector3(); // 평행이동 T
+    let gScale = 1.0;                // 추가 스케일 (m기반 도면 → 현실)
+    let gYaw = 0.0;                  // yaw(라디안)
+    let gTrans = new THREE.Vector3();// 평행이동 T
+
+    // 초기 프리뷰용 플래그
+    let previewDrawn = false;
 
     const pointSelect = document.getElementById("point-select");
     const mainButton = document.getElementById("main-button");
@@ -295,6 +306,7 @@
             hitTestSourceRequested = false;
             reticle3D.visible = false;
             isARStarted = false;
+            previewDrawn = false;
             mainButton.textContent = "START AR";
             pointSelect.disabled = true;
             B1_world = null;
@@ -329,7 +341,7 @@
       const label = pointSelect.value; // "B1" or "B2"
 
       if (!firstSelectedLabel) {
-        firstSelectedLabel = label; // 처음 선택한 현실 점
+        firstSelectedLabel = label; // 첫 현실 기준점
         setStatus(`첫 기준점으로 ${label}를 선택했습니다.`);
       }
 
@@ -341,28 +353,26 @@
         setStatus(`B2 저장: (${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`);
       }
 
-      if (B1_world && B2_world && A1_PLAN_M && A2_PLAN_M) {
+      if (B1_world && B2_world && A1_PLAN_3D && A2_PLAN_3D) {
         computeTransformAndRedraw();
       }
     }
 
-    // ---------- 도면 좌표(mm) → 월드 좌표 변환 ----------
+    // ---------- 도면 좌표(mm) → 월드 좌표 ----------
     function planToWorld(x_mm, y_mm) {
-      // 도면 mm → m (2D)
-      const p = new THREE.Vector3(
-        x_mm * MM_TO_M, // X
-        0,
-        y_mm * MM_TO_M  // Z (도면 Y를 Z로 사용)
-      );
+      // 1) 도면 mm → m & 좌표계 매핑: DXF (x, y) → (x, z=-y)
+      const x_m = x_mm * MM_TO_M;
+      const z_m = -y_mm * MM_TO_M;
+      const p = new THREE.Vector3(x_m, 0, z_m);
 
-      // scale 적용
+      // 2) scale
       p.multiplyScalar(gScale);
 
-      // yaw 회전 (Y축)
+      // 3) yaw (Y축 회전)
       const rotY = new THREE.Matrix4().makeRotationY(gYaw);
       p.applyMatrix4(rotY);
 
-      // 평행이동
+      // 4) translation
       p.add(gTrans);
 
       return p;
@@ -370,19 +380,19 @@
 
     // ---------- 변환 계산: scale + yaw + translation ----------
     function computeTransformAndRedraw() {
-      // 1) 도면 A1–A2 길이 (m 단위)
+      // 1) 도면 A1–A2 길이 (XZ 평면, m)
       const vPlan = new THREE.Vector2(
-        A2_PLAN_M.x - A1_PLAN_M.x,
-        A2_PLAN_M.y - A1_PLAN_M.y
+        A2_PLAN_3D.x - A1_PLAN_3D.x,
+        A2_PLAN_3D.z - A1_PLAN_3D.z
       );
-      const lenPlan = vPlan.length();      // m
+      const lenPlan = vPlan.length();
 
-      // 2) 현실 B1–B2 길이 (m, XZ 평면)
+      // 2) 현실 B1–B2 길이 (XZ 평면, m)
       const vWorld2D = new THREE.Vector2(
         B2_world.x - B1_world.x,
         B2_world.z - B1_world.z
       );
-      const lenWorld = vWorld2D.length();  // m
+      const lenWorld = vWorld2D.length();
 
       if (lenPlan === 0 || lenWorld === 0) {
         setResult("벡터 길이가 0이라 보정할 수 없습니다.");
@@ -392,40 +402,38 @@
       // 3) 도면을 현실 길이에 맞추는 스케일
       gScale = lenWorld / lenPlan;   // (현실) / (도면)
 
-      // 4) yaw (수평 방향만)
+      // 4) yaw 계산
       const anglePlan = Math.atan2(vPlan.y, vPlan.x);
       const angleWorld = Math.atan2(vWorld2D.y, vWorld2D.x);
       gYaw = angleWorld - anglePlan;
 
-      // 5) anchor(A1 또는 A2) ↔ 처음 선택된 B1/B2 로 평행이동 계산
-      let anchorPlan2D;   // THREE.Vector2 (m)
-      let anchorWorld3D;  // THREE.Vector3 (m)
+      // 5) anchor 선택 (첫 현실 점 ↔ A1 또는 A2)
+      let anchorPlan3D;   // THREE.Vector3(m)
+      let anchorWorld3D;  // THREE.Vector3(m)
 
       if (firstSelectedLabel === "B1") {
-        anchorPlan2D = A1_PLAN_M;          // A1 ↔ B1
-        anchorWorld3D = B1_world;
+        // B1를 먼저 찍었으니: A1 ↔ B1
+        anchorPlan3D = A1_PLAN_3D.clone();
+        anchorWorld3D = B1_world.clone();
       } else {
-        anchorPlan2D = A2_PLAN_M;          // A2 ↔ B2
-        anchorWorld3D = B2_world;
+        // B2를 먼저 찍었으니: A2 ↔ B2
+        anchorPlan3D = A2_PLAN_3D.clone();
+        anchorWorld3D = B2_world.clone();
       }
 
-      const anchorPlan3D = new THREE.Vector3(
-        anchorPlan2D.x,
-        0,
-        anchorPlan2D.y
-      );
+      // Anchor에 scale, yaw 적용 후 translation 계산
       anchorPlan3D.multiplyScalar(gScale);
       const rotY = new THREE.Matrix4().makeRotationY(gYaw);
       anchorPlan3D.applyMatrix4(rotY);
 
-      // T = B_anchor - R * s * A_anchor
+      // T = B_anchor - R*s*A_anchor
       gTrans = anchorWorld3D.clone().sub(anchorPlan3D);
 
       const yawDeg = gYaw * 180 / Math.PI;
       const msg =
         `첫 기준점: ${firstSelectedLabel} (=> ${firstSelectedLabel === "B1" ? "A1" : "A2"})\n\n` +
-        `A1(m) = (${A1_PLAN_M.x.toFixed(3)}, ${A1_PLAN_M.y.toFixed(3)})\n` +
-        `A2(m) = (${A2_PLAN_M.x.toFixed(3)}, ${A2_PLAN_M.y.toFixed(3)})\n` +
+        `A1_3D(m) = (${A1_PLAN_3D.x.toFixed(3)}, 0.000, ${A1_PLAN_3D.z.toFixed(3)})\n` +
+        `A2_3D(m) = (${A2_PLAN_3D.x.toFixed(3)}, 0.000, ${A2_PLAN_3D.z.toFixed(3)})\n` +
         `도면 A1–A2 길이 = ${lenPlan.toFixed(3)} m\n\n` +
         `B1 = (${B1_world.x.toFixed(3)}, ${B1_world.y.toFixed(3)}, ${B1_world.z.toFixed(3)}) m\n` +
         `B2 = (${B2_world.x.toFixed(3)}, ${B2_world.y.toFixed(3)}, ${B2_world.z.toFixed(3)}) m\n` +
@@ -437,7 +445,46 @@
       setResult(msg);
       setStatus("보정 완료. 도면을 anchor 기준으로 다시 그립니다.");
 
-      // 6) 도면 전체를 다시 그림
+      // 6) 도면 다시 그리기
+      planGroup.clear();
+      const mat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+
+      for (const seg of planSegments) {
+        const p1 = planToWorld(seg.x1, seg.y1);
+        const p2 = planToWorld(seg.x2, seg.y2);
+        const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+        const line = new THREE.Line(geom, mat);
+        planGroup.add(line);
+      }
+    }
+
+    // ---------- 초기 프리뷰: 카메라 정면 1m 앞에 도면 표시 ----------
+    function drawPreviewIfReady() {
+      if (previewDrawn) return;
+      if (!isARStarted) return;
+      if (!A1_PLAN_3D || !A2_PLAN_3D) return;
+      if (planSegments.length === 0) return;
+
+      const xrCam = renderer.xr.getCamera(camera);
+      const camPos = new THREE.Vector3();
+      xrCam.getWorldPosition(camPos);
+
+      const camDir = new THREE.Vector3(0, 0, -1);
+      camDir.applyQuaternion(xrCam.quaternion).normalize();
+
+      const anchorWorld = camPos.clone().add(camDir.multiplyScalar(1.0)); // 카메라 정면 1m
+
+      // 초기 프리뷰: scale=1, yaw=0, A1이 anchor 위치로 가도록
+      gScale = 1.0;
+      gYaw = 0.0;
+
+      const anchorPlan = A1_PLAN_3D.clone().multiplyScalar(gScale);
+      gTrans = anchorWorld.clone().sub(anchorPlan);
+
+      previewDrawn = true;
+      setStatus("도면 프리뷰를 카메라 정면 1m 앞에 표시했습니다.");
+
+      // 프리뷰 그리기
       planGroup.clear();
       const mat = new THREE.LineBasicMaterial({ color: 0x00ffff });
 
@@ -459,8 +506,6 @@
       }
 
       if (!xrRefSpace) {
-        // referenceSpace 는 startAR 시에 요청하지만,
-        // 혹시 null 이면 한 번 더 시도
         session.requestReferenceSpace("local").then((refSpace) => {
           xrRefSpace = refSpace;
         });
@@ -491,6 +536,9 @@
           reticle3D.visible = false;
         }
       }
+
+      // AR 세션 + 도면 로드 후, 한 번만 프리뷰 생성
+      drawPreviewIfReady();
 
       renderer.render(scene, camera);
     });
