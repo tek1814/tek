@@ -1,553 +1,314 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>AR Yaw Calib (A1/A2 – B1/B2)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta charset="UTF-8">
+  <title>AR Plan Alignment (A1–A2 ↔ B1–B2)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      width: 100%;
-      height: 100%;
-      background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #fff;
-    }
-
-    #overlay-ui {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-    }
-
-    #top-bar {
-      position: absolute;
-      top: env(safe-area-inset-top, 8px);
-      left: 0;
-      right: 0;
-      text-align: center;
-      font-size: 14px;
-      text-shadow: 0 0 4px rgba(0,0,0,0.7);
-      pointer-events: none;
-    }
-
+    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; color:#fff; }
+    #overlay { position:fixed; inset:0; pointer-events:none; }
     #center-dot {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.95);
-      pointer-events: none;
+      position:absolute; left:50%; top:50%; transform:translate(-50%, -50%);
+      width:8px; height:8px; background:#fff; border-radius:50%;
     }
-
-    #bottom-bar {
-      position: absolute;
-      bottom: env(safe-area-inset-bottom, 12px);
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      pointer-events: auto;
+    #ui {
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      display:flex; flex-direction:column; gap:6px; align-items:center;
+      pointer-events:auto;
     }
-
-    #instruction {
-      font-size: 11px;
-      text-align: center;
-      max-width: 90vw;
-      opacity: 0.9;
+    select, button {
+      padding:8px 14px; border-radius:999px; font-size:13px;
+      border:none; background:#007aff; color:#fff;
     }
-
-    #controls {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    select {
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.4);
-      background: rgba(0,0,0,0.4);
-      color: #fff;
-      font-size: 12px;
-    }
-
-    button {
-      min-width: 120px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      border: none;
-      font-size: 13px;
-      font-weight: 600;
-      color: #fff;
-      background: #007aff;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      box-shadow: none;
-    }
-
-    #status-label {
-      font-size: 11px;
-      opacity: 0.9;
-      text-align: center;
-    }
-
-    #result-label {
-      font-size: 11px;
-      opacity: 0.9;
-      text-align: center;
-      max-width: 95vw;
-      white-space: pre-line;
-    }
+    #status, #result { font-size:12px; text-align:center; white-space:pre-line; }
+    #result { margin-top:6px; max-width:90vw; }
   </style>
 </head>
 <body>
-  <div id="overlay-ui">
-    <div id="top-bar">A1/A2 ↔ B1/B2 Yaw 보정 테스트</div>
+  <div id="overlay">
     <div id="center-dot"></div>
-
-    <div id="bottom-bar">
-      <div id="instruction">
-        처음에는 [START AR]를 눌러 AR을 시작합니다.<br/>
-        AR 시작 후에는 왼쪽에서 B1/B2를 고르고 [선택]으로 찍으세요.
-      </div>
-
-      <div id="controls">
-        <select id="point-select" disabled>
-          <option value="B1">B1</option>
-          <option value="B2">B2</option>
-        </select>
-        <button id="main-button">START AR</button>
-      </div>
-
-      <div id="status-label">상태: 준비 완료</div>
-      <div id="result-label"></div>
+    <div id="ui">
+      <select id="selectPoint" disabled>
+        <option value="B1">B1</option>
+        <option value="B2">B2</option>
+      </select>
+      <button id="btnMain">START AR</button>
+      <div id="status">상태: 준비</div>
+      <div id="result"></div>
     </div>
   </div>
 
   <script type="module">
-    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js";
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.155/build/three.module.js";
 
-    // ---------- 기본 three.js / WebXR ----------
+    // ============================================================
+    // ---------------------- 기본 세팅 ----------------------------
+    // ============================================================
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      70, window.innerWidth / window.innerHeight, 0.01, 50
-    );
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 50);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    const renderer = new THREE.WebGLRenderer({ alpha:true, antialias:true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
     scene.add(light);
 
-    // 바닥 hit-test용 3D 원 레티클
-    const reticle3D = new THREE.Mesh(
+    // 바닥 hit-test용 레티클
+    const reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.03, 0.035, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffffff })
+      new THREE.MeshBasicMaterial({ color:0xffffff })
     );
-    reticle3D.rotation.x = -Math.PI / 2;
-    reticle3D.visible = false;
-    scene.add(reticle3D);
+    reticle.rotation.x = -Math.PI/2;
+    reticle.visible = false;
+    scene.add(reticle);
 
-    // ---------- 단위 및 도면 기준점 ----------
-    const MM_TO_M = 0.001;  // 도면: mm, WebXR: m
+    // UI
+    const selectPoint = document.getElementById("selectPoint");
+    const btnMain = document.getElementById("btnMain");
+    const statusBox = document.getElementById("status");
+    const resultBox = document.getElementById("result");
 
-    // A1/A2 (도면 기준점) – 2D(m) + 3D(m, XZ)
-    let A1_PLAN_2D = null;   // THREE.Vector2(x_m, y_m) – 원래 DXF 평면 좌표
-    let A2_PLAN_2D = null;
-    let A1_PLAN_3D = null;   // THREE.Vector3(x_m, 0, z_m = -y_m)
-    let A2_PLAN_3D = null;
+    function setStatus(msg){ statusBox.textContent = "상태: " + msg; }
+    function setResult(msg){ resultBox.textContent = msg; }
 
-    // 도면 선분 (Office_2.json에서 읽어옴, mm 단위)
-    const planSegments = []; // {x1,y1,x2,y2} in mm
+    // ============================================================
+    // -------------------- 도면 데이터 ----------------------------
+    // ============================================================
+    const MM = 0.001;
+    let A1 = null, A2 = null;         // THREE.Vector3 (m), (x,0,z=y)
+    let segs = [];                    // 각 선분 {x1,y1,x2,y2}
     const planGroup = new THREE.Group();
     scene.add(planGroup);
 
-    async function loadPlanJson() {
-      try {
-        const res = await fetch("./Office_2.json");
-        const json = await res.json();
+    async function loadPlan(){
+      const json = await (await fetch("./Office_2.json")).json();
+      const layers = json.layers ?? json;
 
-        const layersObj = json.layers && typeof json.layers === "object"
-          ? json.layers
-          : json;
+      // A1/A2 중심점
+      const [A1_mm_x, A1_mm_y] = layers.A1[0].center;
+      const [A2_mm_x, A2_mm_y] = layers.A2[0].center;
+      A1 = new THREE.Vector3(A1_mm_x*MM, 0, A1_mm_y*MM);
+      A2 = new THREE.Vector3(A2_mm_x*MM, 0, A2_mm_y*MM);
 
-        // A1/A2 추출
-        if (layersObj.A1 && layersObj.A1[0] && layersObj.A1[0].center) {
-          const [x_mm, y_mm] = layersObj.A1[0].center;
-          const x_m = x_mm * MM_TO_M;
-          const y_m = y_mm * MM_TO_M;
-          A1_PLAN_2D = new THREE.Vector2(x_m, y_m);
-          A1_PLAN_3D = new THREE.Vector3(x_m, 0, -y_m); // z = -y
-        }
-        if (layersObj.A2 && layersObj.A2[0] && layersObj.A2[0].center) {
-          const [x_mm, y_mm] = layersObj.A2[0].center;
-          const x_m = x_mm * MM_TO_M;
-          const y_m = y_mm * MM_TO_M;
-          A2_PLAN_2D = new THREE.Vector2(x_m, y_m);
-          A2_PLAN_3D = new THREE.Vector3(x_m, 0, -y_m);
-        }
-
-        // 도면 선분 추출
-        for (const [layerName, ents] of Object.entries(layersObj)) {
-          if (!Array.isArray(ents)) continue;
-          if (layerName === "A1" || layerName === "A2") continue;
-
-          for (const ent of ents) {
-            if (ent.type === "LINE" && Array.isArray(ent.start) && Array.isArray(ent.end)) {
-              const [x1, y1] = ent.start;
-              const [x2, y2] = ent.end;
-              planSegments.push({ x1, y1, x2, y2 });
-            } else if (ent.type === "LWPOLYLINE" && Array.isArray(ent.points)) {
-              for (let i = 0; i < ent.points.length - 1; i++) {
-                const [x1, y1] = ent.points[i];
-                const [x2, y2] = ent.points[i + 1];
-                planSegments.push({ x1, y1, x2, y2 });
-              }
+      // 도면 선분 추출
+      for (const [layer, ents] of Object.entries(layers)){
+        if (!Array.isArray(ents)) continue;
+        if (layer === "A1" || layer === "A2") continue;
+        for (const e of ents){
+          if (e.type==="LINE"){
+            const [x1,y1]=e.start, [x2,y2]=e.end;
+            segs.push({x1,y1,x2,y2});
+          }
+          if (e.type==="LWPOLYLINE"){
+            for (let i=0;i<e.points.length-1;i++){
+              const [x1,y1]=e.points[i], [x2,y2]=e.points[i+1];
+              segs.push({x1,y1,x2,y2});
             }
           }
         }
-
-        if (!A1_PLAN_3D || !A2_PLAN_3D) {
-          setStatus("A1/A2 기준점을 JSON에서 찾지 못했습니다.");
-        } else {
-          console.log("A1_3D(m):", A1_PLAN_3D, "A2_3D(m):", A2_PLAN_3D);
-          setStatus("도면 JSON 로드 완료. AR에서 B1/B2를 찍어 보정하세요.");
-        }
-      } catch (e) {
-        console.error(e);
-        setStatus("Office_2.json 로드 실패");
       }
+      setStatus("도면 로드 완료");
     }
+    loadPlan();
 
-    loadPlanJson();
+    // ============================================================
+    // --------------- 정합에 필요한 상태 -------------------------
+    // ============================================================
+    let B1 = null, B2 = null;         // THREE.Vector3 (m)
+    let first = null;                 // "B1" or "B2" ← anchor
+    let gScale = 1, gYaw = 0;
+    let gTrans = new THREE.Vector3();
+    let previewDone = false;
+    let xrRef = null, hitSrc = null, hitReq = false;
 
-    // ---------- AR / Hit-test 상태 ----------
-    let xrSession = null;
-    let xrRefSpace = null;
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
-
-    let B1_world = null;
-    let B2_world = null;
-
-    // 첫 번째로 선택된 현실 점(B1/B2)
-    let firstSelectedLabel = null; // "B1" or "B2"
-
-    // 최종 변환값 (도면 → 월드)
-    let gScale = 1.0;                // 추가 스케일 (m기반 도면 → 현실)
-    let gYaw = 0.0;                  // yaw(라디안)
-    let gTrans = new THREE.Vector3();// 평행이동 T
-
-    // 초기 프리뷰용 플래그
-    let previewDrawn = false;
-
-    const pointSelect = document.getElementById("point-select");
-    const mainButton = document.getElementById("main-button");
-    const statusLabel = document.getElementById("status-label");
-    const resultLabel = document.getElementById("result-label");
-
-    function setStatus(msg) {
-      statusLabel.textContent = "상태: " + msg;
-      console.log("[STATUS]", msg);
-    }
-
-    function setResult(msg) {
-      resultLabel.textContent = msg;
-      console.log("[RESULT]\n" + msg);
-    }
-
-    let isARStarted = false;
-
-    mainButton.addEventListener("click", () => {
-      if (!isARStarted) {
-        startAR();
-      } else {
-        selectCurrentPoint();
-      }
-    });
-
-    function startAR() {
-      if (!navigator.xr) {
-        setStatus("이 브라우저는 WebXR(AR)을 지원하지 않습니다.");
-        return;
-      }
-
-      const sessionInit = {
-        requiredFeatures: ["hit-test"],
-        optionalFeatures: ["dom-overlay"],
-        domOverlay: { root: document.body }
-      };
-
-      navigator.xr.requestSession("immersive-ar", sessionInit)
-        .then((session) => {
-          xrSession = session;
-          renderer.xr.setReferenceSpaceType("local");
-          renderer.xr.setSession(session);
-
-          session.addEventListener("end", () => {
-            xrSession = null;
-            xrRefSpace = null;
-            hitTestSource = null;
-            hitTestSourceRequested = false;
-            reticle3D.visible = false;
-            isARStarted = false;
-            previewDrawn = false;
-            mainButton.textContent = "START AR";
-            pointSelect.disabled = true;
-            B1_world = null;
-            B2_world = null;
-            firstSelectedLabel = null;
-            planGroup.clear();
-            setStatus("AR 세션 종료");
-          });
-
-          session.requestReferenceSpace("local").then((refSpace) => {
-            xrRefSpace = refSpace;
-          });
-
-          isARStarted = true;
-          mainButton.textContent = "선택";
-          pointSelect.disabled = false;
-          setStatus("바닥에 레티클을 맞춘 뒤, B1/B2를 선택해서 찍으세요.");
-        })
-        .catch((err) => {
-          console.error(err);
-          setStatus("AR 세션 시작 실패");
-        });
-    }
-
-    function selectCurrentPoint() {
-      if (!reticle3D.visible) {
-        setStatus("바닥 hit-test가 아직 없습니다. 카메라를 바닥으로 향하게 해 보세요.");
-        return;
-      }
-
-      const pos = reticle3D.position.clone();
-      const label = pointSelect.value; // "B1" or "B2"
-
-      if (!firstSelectedLabel) {
-        firstSelectedLabel = label; // 첫 현실 기준점
-        setStatus(`첫 기준점으로 ${label}를 선택했습니다.`);
-      }
-
-      if (label === "B1") {
-        B1_world = pos;
-        setStatus(`B1 저장: (${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`);
-      } else {
-        B2_world = pos;
-        setStatus(`B2 저장: (${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`);
-      }
-
-      if (B1_world && B2_world && A1_PLAN_3D && A2_PLAN_3D) {
-        computeTransformAndRedraw();
-      }
-    }
-
-    // ---------- 도면 좌표(mm) → 월드 좌표 ----------
-    function planToWorld(x_mm, y_mm) {
-      // 1) 도면 mm → m & 좌표계 매핑: DXF (x, y) → (x, z=-y)
-      const x_m = x_mm * MM_TO_M;
-      const z_m = -y_mm * MM_TO_M;
-      const p = new THREE.Vector3(x_m, 0, z_m);
-
-      // 2) scale
-      p.multiplyScalar(gScale);
-
-      // 3) yaw (Y축 회전)
-      const rotY = new THREE.Matrix4().makeRotationY(gYaw);
-      p.applyMatrix4(rotY);
-
-      // 4) translation
-      p.add(gTrans);
-
-      return p;
-    }
-
-    // ---------- 변환 계산: scale + yaw + translation ----------
-    function computeTransformAndRedraw() {
-      // 1) 도면 A1–A2 길이 (XZ 평면, m)
-      const vPlan = new THREE.Vector2(
-        A2_PLAN_3D.x - A1_PLAN_3D.x,
-        A2_PLAN_3D.z - A1_PLAN_3D.z
-      );
-      const lenPlan = vPlan.length();
-
-      // 2) 현실 B1–B2 길이 (XZ 평면, m)
-      const vWorld2D = new THREE.Vector2(
-        B2_world.x - B1_world.x,
-        B2_world.z - B1_world.z
-      );
-      const lenWorld = vWorld2D.length();
-
-      if (lenPlan === 0 || lenWorld === 0) {
-        setResult("벡터 길이가 0이라 보정할 수 없습니다.");
-        return;
-      }
-
-      // 3) 도면을 현실 길이에 맞추는 스케일
-      gScale = lenWorld / lenPlan;   // (현실) / (도면)
-
-      // 4) yaw 계산
-      const anglePlan = Math.atan2(vPlan.y, vPlan.x);
-      const angleWorld = Math.atan2(vWorld2D.y, vWorld2D.x);
-      gYaw = angleWorld - anglePlan;
-
-      // 5) anchor 선택 (첫 현실 점 ↔ A1 또는 A2)
-      let anchorPlan3D;   // THREE.Vector3(m)
-      let anchorWorld3D;  // THREE.Vector3(m)
-
-      if (firstSelectedLabel === "B1") {
-        // B1를 먼저 찍었으니: A1 ↔ B1
-        anchorPlan3D = A1_PLAN_3D.clone();
-        anchorWorld3D = B1_world.clone();
-      } else {
-        // B2를 먼저 찍었으니: A2 ↔ B2
-        anchorPlan3D = A2_PLAN_3D.clone();
-        anchorWorld3D = B2_world.clone();
-      }
-
-      // Anchor에 scale, yaw 적용 후 translation 계산
-      anchorPlan3D.multiplyScalar(gScale);
-      const rotY = new THREE.Matrix4().makeRotationY(gYaw);
-      anchorPlan3D.applyMatrix4(rotY);
-
-      // T = B_anchor - R*s*A_anchor
-      gTrans = anchorWorld3D.clone().sub(anchorPlan3D);
-
-      const yawDeg = gYaw * 180 / Math.PI;
-      const msg =
-        `첫 기준점: ${firstSelectedLabel} (=> ${firstSelectedLabel === "B1" ? "A1" : "A2"})\n\n` +
-        `A1_3D(m) = (${A1_PLAN_3D.x.toFixed(3)}, 0.000, ${A1_PLAN_3D.z.toFixed(3)})\n` +
-        `A2_3D(m) = (${A2_PLAN_3D.x.toFixed(3)}, 0.000, ${A2_PLAN_3D.z.toFixed(3)})\n` +
-        `도면 A1–A2 길이 = ${lenPlan.toFixed(3)} m\n\n` +
-        `B1 = (${B1_world.x.toFixed(3)}, ${B1_world.y.toFixed(3)}, ${B1_world.z.toFixed(3)}) m\n` +
-        `B2 = (${B2_world.x.toFixed(3)}, ${B2_world.y.toFixed(3)}, ${B2_world.z.toFixed(3)}) m\n` +
-        `실세계 B1–B2 길이 = ${lenWorld.toFixed(3)} m\n\n` +
-        `스케일(scale 도면→현실) = ${gScale.toFixed(5)}\n` +
-        `Yaw(rad) = ${gYaw.toFixed(5)}\n` +
-        `Yaw(°)   = ${yawDeg.toFixed(3)}°`;
-
-      setResult(msg);
-      setStatus("보정 완료. 도면을 anchor 기준으로 다시 그립니다.");
-
-      // 6) 도면 다시 그리기
-      planGroup.clear();
-      const mat = new THREE.LineBasicMaterial({ color: 0x00ffff });
-
-      for (const seg of planSegments) {
-        const p1 = planToWorld(seg.x1, seg.y1);
-        const p2 = planToWorld(seg.x2, seg.y2);
-        const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-        const line = new THREE.Line(geom, mat);
-        planGroup.add(line);
-      }
-    }
-
-    // ---------- 초기 프리뷰: 카메라 정면 1m 앞에 도면 표시 ----------
-    function drawPreviewIfReady() {
-      if (previewDrawn) return;
-      if (!isARStarted) return;
-      if (!A1_PLAN_3D || !A2_PLAN_3D) return;
-      if (planSegments.length === 0) return;
+    // ============================================================
+    // -------------------- 초기 프리뷰 ----------------------------
+    // ============================================================
+    function drawPreview(){
+      if (previewDone || !A1 || segs.length===0) return;
 
       const xrCam = renderer.xr.getCamera(camera);
       const camPos = new THREE.Vector3();
       xrCam.getWorldPosition(camPos);
 
-      const camDir = new THREE.Vector3(0, 0, -1);
-      camDir.applyQuaternion(xrCam.quaternion).normalize();
+      const dir = new THREE.Vector3(0,0,-1).applyQuaternion(xrCam.quaternion).normalize();
+      const anchorWorld = camPos.clone().add(dir.multiplyScalar(1)); // 1m 앞
 
-      const anchorWorld = camPos.clone().add(camDir.multiplyScalar(1.0)); // 카메라 정면 1m
+      // preview: scale=1, yaw=0, translate so A1 goes to anchorWorld
+      gScale=1; gYaw=0;
 
-      // 초기 프리뷰: scale=1, yaw=0, A1이 anchor 위치로 가도록
-      gScale = 1.0;
-      gYaw = 0.0;
+      const A1_t = A1.clone(); // scale,yaw=1,0 → 그대로
+      gTrans = anchorWorld.clone().sub(A1_t);
 
-      const anchorPlan = A1_PLAN_3D.clone().multiplyScalar(gScale);
-      gTrans = anchorWorld.clone().sub(anchorPlan);
+      redrawPlan();
+      previewDone = true;
+      setStatus("도면 프리뷰 표시됨");
+    }
 
-      previewDrawn = true;
-      setStatus("도면 프리뷰를 카메라 정면 1m 앞에 표시했습니다.");
+    // ============================================================
+    // ----------------- 도면 변환 후 그리기 -----------------------
+    // ============================================================
+    function planToWorld(x_mm, y_mm){
+      const p = new THREE.Vector3(x_mm*MM, 0, y_mm*MM);  // DXF(y)→Z(양수)
 
-      // 프리뷰 그리기
+      p.multiplyScalar(gScale);
+      p.applyAxisAngle(new THREE.Vector3(0,1,0), gYaw);
+      p.add(gTrans);
+
+      return p;
+    }
+
+    function redrawPlan(){
       planGroup.clear();
-      const mat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+      const mat = new THREE.LineBasicMaterial({ color:0x00ffff });
 
-      for (const seg of planSegments) {
-        const p1 = planToWorld(seg.x1, seg.y1);
-        const p2 = planToWorld(seg.x2, seg.y2);
-        const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-        const line = new THREE.Line(geom, mat);
-        planGroup.add(line);
+      for (const s of segs){
+        const p1 = planToWorld(s.x1, s.y1);
+        const p2 = planToWorld(s.x2, s.y2);
+        const geom = new THREE.BufferGeometry().setFromPoints([p1,p2]);
+        planGroup.add(new THREE.Line(geom, mat));
       }
     }
 
-    // ---------- 렌더 루프 / hit-test ----------
-    renderer.setAnimationLoop((time, frame) => {
-      const session = renderer.xr.getSession();
-      if (!session || !frame) {
-        renderer.render(scene, camera);
+    // ============================================================
+    // ----------------------- 정합 계산 ---------------------------
+    // ============================================================
+    function computeAlignment(){
+      // A1–A2 (도면 기준선)
+      const vp = new THREE.Vector2(A2.x - A1.x, A2.z - A1.z);
+      const lenP = vp.length();
+
+      // B1–B2 (현실 기준선)
+      const vw = new THREE.Vector2(B2.x - B1.x, B2.z - B1.z);
+      const lenW = vw.length();
+
+      gScale = lenW / lenP;
+
+      const angP = Math.atan2(vp.y, vp.x);
+      const angW = Math.atan2(vw.y, vw.x);
+      gYaw = angW - angP;
+
+      let A_anchor, B_anchor;
+      if (first==="B1"){ A_anchor=A1; B_anchor=B1; }
+      else { A_anchor=A2; B_anchor=B2; }
+
+      const A_t = A_anchor.clone().multiplyScalar(gScale);
+      A_t.applyAxisAngle(new THREE.Vector3(0,1,0), gYaw);
+
+      gTrans = B_anchor.clone().sub(A_t);
+
+      redrawPlan();
+
+      setResult(
+        `Anchor: ${first}\n` +
+        `도면길이 = ${lenP.toFixed(3)} m\n` +
+        `현실길이 = ${lenW.toFixed(3)} m\n` +
+        `scale = ${gScale.toFixed(5)}\n` +
+        `yaw = ${(gYaw*180/Math.PI).toFixed(3)}°`
+      );
+      setStatus("정합 완료");
+    }
+
+    // ============================================================
+    // --------------------- 사용자 선택 ---------------------------
+    // ============================================================
+    function selectPointAtReticle(){
+      if (!reticle.visible){
+        setStatus("hit-test 없음");
         return;
       }
 
-      if (!xrRefSpace) {
-        session.requestReferenceSpace("local").then((refSpace) => {
-          xrRefSpace = refSpace;
+      const pos = reticle.position.clone();
+      const sel = selectPoint.value;
+
+      if (!first) first = sel;
+
+      if (sel==="B1") B1 = pos;
+      else            B2 = pos;
+
+      setStatus(`${sel} 저장 완료`);
+
+      if (B1 && B2){
+        computeAlignment();
+      }
+    }
+
+    // ============================================================
+    // --------------------- AR 세션 시작 ---------------------------
+    // ============================================================
+    function startAR(){
+      const init = {
+        requiredFeatures:["hit-test"],
+        optionalFeatures:["dom-overlay"],
+        domOverlay:{ root:document.body }
+      };
+
+      navigator.xr.requestSession("immersive-ar", init).then((session)=>{
+        renderer.xr.setSession(session);
+        session.requestReferenceSpace("local").then(ref=>xrRef=ref);
+
+        session.addEventListener("end", ()=>{
+          B1=B2=first=null;
+          previewDone=false;
+          planGroup.clear();
+          selectPoint.disabled=true;
+          btnMain.textContent="START AR";
+          setStatus("AR 종료");
         });
+
+        selectPoint.disabled=false;
+        btnMain.textContent="선택";
+        setStatus("AR 시작됨. B1/B2 선택");
+
+      }).catch(()=>setStatus("AR 불가"));
+    }
+
+    btnMain.onclick = ()=>{
+      if (btnMain.textContent==="START AR") startAR();
+      else selectPointAtReticle();
+    };
+
+    // ============================================================
+    // --------------------- 렌더 루프 -----------------------------
+    // ============================================================
+    renderer.setAnimationLoop((time, frame)=>{
+      const session = renderer.xr.getSession();
+      if (!session || !frame){ renderer.render(scene, camera); return; }
+
+      if (!hitReq){
+        session.requestReferenceSpace("viewer").then(viewerSpace=>{
+          session.requestHitTestSource({ space:viewerSpace })
+            .then(src=>hitSrc=src);
+        });
+        hitReq=true;
       }
 
-      if (!hitTestSourceRequested) {
-        session.requestReferenceSpace("viewer").then((viewerSpace) => {
-          session.requestHitTestSource({ space: viewerSpace })
-            .then((source) => {
-              hitTestSource = source;
-            })
-            .catch((err) => console.error("HitTestSource 오류:", err));
-        });
-        hitTestSourceRequested = true;
-      }
+      if (hitSrc && xrRef){
+        const hits = frame.getHitTestResults(hitSrc);
+        if (hits.length>0){
+          const pose = hits[0].getPose(xrRef);
+          if (pose){
+            const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+            reticle.visible=true;
+            reticle.position.setFromMatrixPosition(m);
 
-      if (hitTestSource && xrRefSpace) {
-        const hits = frame.getHitTestResults(hitTestSource);
-        if (hits.length > 0) {
-          const hit = hits[0];
-          const pose = hit.getPose(xrRefSpace);
-          if (pose) {
-            const mat = new THREE.Matrix4().fromArray(pose.transform.matrix);
-            reticle3D.visible = true;
-            reticle3D.position.setFromMatrixPosition(mat);
+            // 초기 프리뷰는 hit-test가 있어야 정확
+            drawPreview();
           }
-        } else {
-          reticle3D.visible = false;
-        }
+        } else reticle.visible=false;
       }
-
-      // AR 세션 + 도면 로드 후, 한 번만 프리뷰 생성
-      drawPreviewIfReady();
 
       renderer.render(scene, camera);
     });
 
-    window.addEventListener("resize", () => {
+    window.onresize = ()=>{
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+    };
   </script>
 </body>
 </html>
