@@ -144,7 +144,7 @@
 
     // ===================== 도면 데이터 =========================
     const MM_TO_M = 0.001;
-    let A1 = null; // THREE.Vector3 (m)  DXF: (x, y) → (x, 0, y)
+    let A1 = null; // THREE.Vector3 (m)  DXF: (x, y) → (x, 0, -y)
     let A2 = null;
     const planSegments = []; // {x1,y1,x2,y2,layer}
     const planGroup = new THREE.Group();
@@ -156,14 +156,14 @@
         const json = await res.json();
         const layers = json.layers && typeof json.layers === "object" ? json.layers : json;
 
-        // A1/A2 중심점 읽기
+        // A1/A2 중심점 읽기 (z = -y 로 통일)
         if (layers.A1 && layers.A1[0] && layers.A1[0].center) {
           const [x_mm, y_mm] = layers.A1[0].center;
-          A1 = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
+          A1 = new THREE.Vector3(x_mm * MM_TO_M, 0, -y_mm * MM_TO_M);
         }
         if (layers.A2 && layers.A2[0] && layers.A2[0].center) {
           const [x_mm, y_mm] = layers.A2[0].center;
-          A2 = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
+          A2 = new THREE.Vector3(x_mm * MM_TO_M, 0, -y_mm * MM_TO_M);
         }
 
         for (const [layerName, ents] of Object.entries(layers)) {
@@ -212,8 +212,8 @@
     let gTrans = new THREE.Vector3();
 
     function planToWorld(x_mm, y_mm) {
-      // DXF (x, y_mm) → 3D (x_m, 0, y_m), 이후 scale/회전/이동
-      const p = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
+      // DXF (x, y_mm) → 3D (x_m, 0, -y_m), 이후 scale/회전/이동
+      const p = new THREE.Vector3(x_mm * MM_TO_M, 0, -y_mm * MM_TO_M);
       p.multiplyScalar(gScale);
       p.applyAxisAngle(new THREE.Vector3(0, 1, 0), gYaw);
       p.add(gTrans);
@@ -234,7 +234,7 @@
     }
 
     function computeAlignment() {
-      // 1) 도면 기준선 A1→A2 (XZ 평면)
+      // 1) 도면 기준선 A1→A2 (XZ 평면, z=-y 사용)
       const vPlan = new THREE.Vector2(A2.x - A1.x, A2.z - A1.z);
       const lenPlan = vPlan.length();
 
@@ -263,7 +263,6 @@
         B_anchor = B2.clone();
       }
 
-      // A_anchor 에 scale+yaw 적용 후, 그 위치가 B_anchor 가 되도록 translation 계산
       const A_t = A_anchor.clone().multiplyScalar(gScale);
       A_t.applyAxisAngle(new THREE.Vector3(0, 1, 0), gYaw);
       gTrans = B_anchor.clone().sub(A_t);
