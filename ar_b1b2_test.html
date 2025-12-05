@@ -12,8 +12,16 @@
       background: #000;
       color: #fff;
     }
-    #info {
+
+    /* AR DOM Overlay 루트 */
+    #overlay {
       position: fixed;
+      inset: 0;
+      pointer-events: none; /* 기본은 클릭 통과 */
+    }
+
+    #info {
+      position: absolute;
       top: 8px;
       left: 50%;
       transform: translateX(-50%);
@@ -22,11 +30,10 @@
       border-radius: 4px;
       font-size: 14px;
       z-index: 20;
-      pointer-events: none;
       white-space: nowrap;
     }
     #help {
-      position: fixed;
+      position: absolute;
       bottom: 60px;
       left: 50%;
       transform: translateX(-50%);
@@ -35,11 +42,12 @@
       border-radius: 4px;
       font-size: 12px;
       z-index: 20;
-      pointer-events: none;
       white-space: nowrap;
     }
+
+    /* 가운데 크로스헤어 */
     #crosshair {
-      position: fixed;
+      position: absolute;
       top: 50%;
       left: 50%;
       width: 30px;
@@ -47,7 +55,6 @@
       margin-left: -15px;
       margin-top: -15px;
       z-index: 15;
-      pointer-events: none;
     }
     #crosshair:before,
     #crosshair:after {
@@ -69,8 +76,10 @@
       height: 2px;
       transform: translateY(-50%);
     }
+
+    /* 선택 버튼만 클릭 가능하게 */
     #selectBtn {
-      position: fixed;
+      position: absolute;
       bottom: 10px;
       left: 50%;
       transform: translateX(-50%);
@@ -81,14 +90,18 @@
       background: rgba(0, 122, 255, 0.9);
       color: #fff;
       z-index: 25;
+      pointer-events: auto; /* 버튼은 클릭 허용 */
     }
   </style>
 </head>
 <body>
-  <div id="info">AR 준비 중...</div>
-  <div id="help">바닥 인식 후: 링을 B1/B2 위치에 맞추고 아래 버튼으로 선택</div>
-  <div id="crosshair"></div>
-  <button id="selectBtn">선택 (B1/B2)</button>
+  <!-- AR DOM Overlay -->
+  <div id="overlay">
+    <div id="info">AR 준비 중...</div>
+    <div id="help">바닥 인식 후: 링을 B1/B2 위치에 맞추고 [선택] 버튼으로 선택</div>
+    <div id="crosshair"></div>
+    <button id="selectBtn">선택 (B1/B2)</button>
+  </div>
 
   <script type="module">
     import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
@@ -99,6 +112,7 @@
     let hitTestSource = null;
     let hitTestSourceRequested = false;
 
+    const overlay = document.getElementById("overlay");
     const info = document.getElementById("info");
     const help = document.getElementById("help");
     const selectBtn = document.getElementById("selectBtn");
@@ -130,7 +144,7 @@
         20
       );
 
-      // Ambient Light
+      // Light
       const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
@@ -145,10 +159,11 @@
       reticle.visible = false;
       scene.add(reticle);
 
-      // ARButton (hit-test 요청)
+      // ARButton: hit-test + dom-overlay 활성화
       const button = ARButton.createButton(renderer, {
         requiredFeatures: ["hit-test"],
-        optionalFeatures: ["local-floor", "bounded-floor"]
+        optionalFeatures: ["dom-overlay", "local-floor", "bounded-floor"],
+        domOverlay: { root: overlay }
       });
       document.body.appendChild(button);
 
