@@ -66,7 +66,7 @@
   <!-- AR DOM Overlay -->
   <div id="overlay">
     <div id="info">AR 준비 중...</div>
-    <div id="help">바닥 인식 후: 십자(reticle)를 B1/B2 위치에 맞추고 [선택] 버튼</div>
+    <div id="help">바닥 인식 후: 조준원(레티클)을 B1/B2 위치에 맞추고 [선택] 버튼</div>
     <button id="selectBtn">선택 (B1/B2)</button>
   </div>
 
@@ -84,7 +84,7 @@
     const help = document.getElementById("help");
     const selectBtn = document.getElementById("selectBtn");
 
-    // 평면에 붙어다니는 3D 크로스헤어(reticle)
+    // 평면에 붙어다니는 3D 조준원(reticle: 원 + 가운데 점)
     let reticle;
 
     // B1, B2 저장용
@@ -115,23 +115,32 @@
       const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
-      // ===== 3D 크로스헤어(십자) 만들기 =====
-      const size = 0.03; // 3cm 정도
-      const geom = new THREE.BufferGeometry();
-      const vertices = new Float32Array([
-        -size, 0, 0,  size, 0, 0,   // 가로선
-         0, 0, -size, 0, 0, size    // 세로선
-      ]);
-      geom.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-      const mat = new THREE.LineBasicMaterial({ color: 0xffffff });
-      const lines = new THREE.LineSegments(geom, mat);
+      // ===== 원 + 가운데 점 레티클 만들기 =====
+      const outerRadius = 0.035; // 3.5cm 정도
+      const innerRadius = 0.03;  // 링 두께
+      const ringGeo = new THREE.RingGeometry(innerRadius, outerRadius, 48);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide
+      });
+      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+
+      const dotRadius = 0.006; // 가운데 점 지름 ~1.2cm
+      const dotGeo = new THREE.CircleGeometry(dotRadius, 32);
+      const dotMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide
+      });
+      const dotMesh = new THREE.Mesh(dotGeo, dotMat);
+      dotMesh.position.set(0, 0.001, 0); // 살짝 위로 올려 z-fighting 방지
 
       reticle = new THREE.Object3D();
-      reticle.add(lines);
-      reticle.rotation.x = -Math.PI / 2; // 평면에 눕혀놓기
+      reticle.add(ringMesh);
+      reticle.add(dotMesh);
+      reticle.rotation.x = -Math.PI / 2; // 평면에 눕히기
       reticle.visible = false;
       scene.add(reticle);
-      // ============================
+      // =====================================
 
       // ARButton: hit-test + dom-overlay 활성화
       const button = ARButton.createButton(renderer, {
@@ -159,7 +168,7 @@
     async function onSessionStart() {
       const session = renderer.xr.getSession();
 
-      info.textContent = "바닥을 향해 폰을 크게 움직여 평면을 먼저 안정화하세요.";
+      info.textContent = "바닥을 향해 폰을 움직여 평면을 먼저 안정화하세요.";
 
       xrRefSpace = await session.requestReferenceSpace("local-floor").catch(() =>
         session.requestReferenceSpace("local")
@@ -201,7 +210,7 @@
     }
 
     function onSelectPoint() {
-      // reticle이 평면 위에 있을 때만 선택 가능
+      // 레티클이 평면 위에 있을 때만 선택 가능
       if (!reticle.visible) {
         info.textContent = "아직 평면이 인식되지 않았습니다.";
         return;
@@ -272,7 +281,7 @@
             );
 
             if (info.textContent.startsWith("바닥을 향해")) {
-              info.textContent = "십자를 B1/B2 위치에 두고 [선택] 버튼";
+              info.textContent = "조준원을 B1/B2 위치에 두고 [선택] 버튼";
             }
           }
         } else {
