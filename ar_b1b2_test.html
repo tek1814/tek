@@ -4,293 +4,184 @@
   <meta charset="UTF-8" />
   <title>AR B1-B2 Distance Test</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: system-ui, sans-serif;
-      background: #000;
-      color: #fff;
-    }
-
-    /* AR DOM Overlay 루트 */
+    body { margin:0; overflow:hidden; background:black; color:white; }
     #overlay {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
+      position: fixed; inset:0; pointer-events:none;
     }
-
     #info {
-      position: absolute;
-      top: 8px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 10px;
-      background: rgba(0, 0, 0, 0.5);
-      border-radius: 4px;
-      font-size: 14px;
-      z-index: 20;
-      white-space: nowrap;
+      position:absolute; top:10px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,0.5); padding:6px 12px; border-radius:4px; z-index:20;
+      font-size:14px;
     }
-
-    #help {
-      position: absolute;
-      bottom: 60px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 10px;
-      background: rgba(0, 0, 0, 0.4);
-      border-radius: 4px;
-      font-size: 12px;
-      z-index: 20;
-      white-space: nowrap;
-    }
-
     #selectBtn {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      font-size: 14px;
-      border-radius: 20px;
-      border: none;
-      background: rgba(0, 122, 255, 0.9);
-      color: #fff;
-      z-index: 25;
-      pointer-events: auto;
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      pointer-events:auto;
+      background:rgba(0,120,255,0.9); color:white; border:none;
+      padding:12px 20px; border-radius:20px; font-size:15px; z-index:30;
     }
   </style>
 </head>
+
 <body>
-  <!-- AR DOM Overlay -->
-  <div id="overlay">
-    <div id="info">AR 준비 중...</div>
-    <div id="help">바닥 인식 후: 조준원(레티클)을 B1/B2 위치에 맞추고 [선택] 버튼</div>
-    <button id="selectBtn">선택 (B1/B2)</button>
-  </div>
+<div id="overlay">
+  <div id="info">AR 준비 중...</div>
+  <button id="selectBtn">선택 (B1/B2)</button>
+</div>
 
-  <script type="module">
-    import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
-    import { ARButton } from "https://unpkg.com/three@0.161.0/examples/jsm/webxr/ARButton.js";
+<script type="module">
+import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
+import { ARButton } from "https://unpkg.com/three@0.161.0/examples/jsm/webxr/ARButton.js";
 
-    let camera, scene, renderer;
-    let xrRefSpace = null;
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
+let camera, scene, renderer;
+let hitTestSource = null;
+let hitTestSourceRequested = false;
+let referenceSpace = null;
 
-    const overlay = document.getElementById("overlay");
-    const info = document.getElementById("info");
-    const help = document.getElementById("help");
-    const selectBtn = document.getElementById("selectBtn");
+// 레티클(원+점)
+let reticle;
 
-    // 평면에 붙어다니는 3D 조준원(reticle: 원 + 가운데 점)
-    let reticle;
+// B1/B2
+let B1 = null, B2 = null;
 
-    // B1, B2 저장용
-    let B1 = null;
-    let B2 = null;
+init();
+animate();
 
-    init();
-    animate();
+function init() {
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
 
-    function init() {
-      // Renderer
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.xr.enabled = true;
-      document.body.appendChild(renderer.domElement);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
 
-      // Scene & Camera
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(
-        70,
-        window.innerWidth / window.innerHeight,
-        0.01,
-        20
-      );
+  // 광원
+  const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+  scene.add(light);
 
-      // Light
-      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-      scene.add(light);
+  // ─────────────────────────────
+  // Measure 스타일: 원 + 가운데 점 레티클
+  // ─────────────────────────────
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.03, 0.035, 48),
+    new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide })
+  );
 
-      // ===== 원 + 가운데 점 레티클 만들기 =====
-      const outerRadius = 0.035; // 3.5cm 정도
-      const innerRadius = 0.03;  // 링 두께
-      const ringGeo = new THREE.RingGeometry(innerRadius, outerRadius, 48);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        side: THREE.DoubleSide
+  const dot = new THREE.Mesh(
+    new THREE.CircleGeometry(0.006, 32),
+    new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide })
+  );
+  dot.position.y = 0.001;
+
+  reticle = new THREE.Group();
+  reticle.add(ring);
+  reticle.add(dot);
+  reticle.rotation.x = -Math.PI / 2;
+  reticle.visible = false;
+  scene.add(reticle);
+  // ─────────────────────────────
+
+  // ARButton
+  document.body.appendChild(ARButton.createButton(renderer, {
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['dom-overlay','local-floor'],
+    domOverlay: { root: document.getElementById('overlay') }
+  }));
+
+  renderer.xr.addEventListener("sessionstart", async () => {
+    const session = renderer.xr.getSession();
+    referenceSpace = await session.requestReferenceSpace("local-floor");
+
+    hitTestSourceRequested = false;
+    hitTestSource = null;
+
+    B1 = null; B2 = null;
+  });
+
+  document.getElementById("selectBtn").onclick = selectPoint;
+}
+
+function selectPoint() {
+  const info = document.getElementById("info");
+
+  if (!reticle.visible) {
+    info.textContent = "평면을 먼저 인식하세요.";
+    return;
+  }
+
+  const p = new THREE.Vector3();
+  reticle.getWorldPosition(p);
+
+  if (!B1) {
+    B1 = p.clone();
+    B2 = null;
+    info.textContent = `B1 지정: ${B1.x.toFixed(2)}, ${B1.z.toFixed(2)}`;
+  } else if (!B2) {
+    B2 = p.clone();
+
+    const dx = B2.x - B1.x;
+    const dy = B2.y - B1.y;
+    const dz = B2.z - B1.z;
+
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    info.textContent = `거리: ${dist.toFixed(3)} m`;
+
+    console.log("B1:", B1);
+    console.log("B2:", B2);
+    console.log("Distance:", dist);
+  } else {
+    B1 = p.clone();
+    B2 = null;
+    info.textContent = `B1 재지정`;
+  }
+}
+
+function animate() { renderer.setAnimationLoop(render); }
+
+function render(timestamp, frame) {
+  const session = renderer.xr.getSession();
+  if (!session || !frame) {
+    renderer.render(scene, camera);
+    return;
+  }
+
+  if (!hitTestSourceRequested) {
+    const viewerSpacePromise = session.requestReferenceSpace('viewer');
+    viewerSpacePromise.then(viewerSpace => {
+      session.requestHitTestSource({ space: viewerSpace }).then(source => {
+        hitTestSource = source;
       });
-      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    });
+    hitTestSourceRequested = true;
+  }
 
-      const dotRadius = 0.006; // 가운데 점 지름 ~1.2cm
-      const dotGeo = new THREE.CircleGeometry(dotRadius, 32);
-      const dotMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        side: THREE.DoubleSide
-      });
-      const dotMesh = new THREE.Mesh(dotGeo, dotMat);
-      dotMesh.position.set(0, 0.001, 0); // 살짝 위로 올려 z-fighting 방지
+  if (hitTestSource && referenceSpace) {
+    const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-      reticle = new THREE.Object3D();
-      reticle.add(ringMesh);
-      reticle.add(dotMesh);
-      reticle.rotation.x = -Math.PI / 2; // 평면에 눕히기
+    if (hitTestResults.length > 0) {
+      const hit = hitTestResults[0];
+      const pose = hit.getPose(referenceSpace);
+
+      if (pose) {
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+        reticle.matrix.decompose(
+          reticle.position,
+          reticle.quaternion,
+          reticle.scale
+        );
+        document.getElementById("info").textContent =
+          "B1/B2 위치에 맞추고 [선택]";
+      }
+    } else {
       reticle.visible = false;
-      scene.add(reticle);
-      // =====================================
-
-      // ARButton: hit-test + dom-overlay 활성화
-      const button = ARButton.createButton(renderer, {
-        requiredFeatures: ["hit-test"],
-        optionalFeatures: ["dom-overlay", "local-floor", "bounded-floor"],
-        domOverlay: { root: overlay }
-      });
-      document.body.appendChild(button);
-
-      renderer.xr.addEventListener("sessionstart", onSessionStart);
-      renderer.xr.addEventListener("sessionend", onSessionEnd);
-
-      // 버튼으로 B1/B2 선택
-      selectBtn.addEventListener("click", onSelectPoint);
-
-      window.addEventListener("resize", onWindowResize);
     }
+  }
 
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    async function onSessionStart() {
-      const session = renderer.xr.getSession();
-
-      info.textContent = "바닥을 향해 폰을 움직여 평면을 먼저 안정화하세요.";
-
-      xrRefSpace = await session.requestReferenceSpace("local-floor").catch(() =>
-        session.requestReferenceSpace("local")
-      );
-
-      hitTestSourceRequested = false;
-      hitTestSource = null;
-      B1 = null;
-      B2 = null;
-    }
-
-    function onSessionEnd() {
-      hitTestSourceRequested = false;
-      hitTestSource = null;
-      xrRefSpace = null;
-      reticle.visible = false;
-      info.textContent = "AR 세션 종료";
-    }
-
-    function requestHitTestSource(frame) {
-      const session = renderer.xr.getSession();
-      if (!session) return;
-
-      session.requestReferenceSpace("viewer").then((viewerRefSpace) => {
-        session
-          .requestHitTestSource({ space: viewerRefSpace })
-          .then((source) => {
-            hitTestSource = source;
-          })
-          .catch((err) => console.error("requestHitTestSource error:", err));
-      });
-
-      session.addEventListener("end", () => {
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-      });
-
-      hitTestSourceRequested = true;
-    }
-
-    function onSelectPoint() {
-      // 레티클이 평면 위에 있을 때만 선택 가능
-      if (!reticle.visible) {
-        info.textContent = "아직 평면이 인식되지 않았습니다.";
-        return;
-      }
-
-      const pos = new THREE.Vector3();
-      reticle.getWorldPosition(pos);
-
-      if (!B1) {
-        B1 = pos.clone();
-        B2 = null;
-        info.textContent = `B1 지정: (${B1.x.toFixed(2)}, ${B1.y.toFixed(
-          2
-        )}, ${B1.z.toFixed(2)}) m`;
-        console.log("B1 set:", B1);
-      } else if (!B2) {
-        B2 = pos.clone();
-        const dx = B2.x - B1.x;
-        const dy = B2.y - B1.y;
-        const dz = B2.z - B1.z;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        info.textContent = `B1–B2 거리: ${dist.toFixed(
-          3
-        )} m (다시 누르면 B1 재지정)`;
-        console.log("B2 set:", B2);
-        console.log("B1–B2 distance (m):", dist);
-      } else {
-        // 이미 B1,B2 모두 있는 상태에서 다시 누르면 B1 재설정
-        B1 = pos.clone();
-        B2 = null;
-        info.textContent = `B1 다시 지정: (${B1.x.toFixed(
-          2
-        )}, ${B1.y.toFixed(2)}, ${B1.z.toFixed(2)}) m`;
-        console.log("B1 reset:", B1);
-      }
-    }
-
-    function animate() {
-      renderer.setAnimationLoop(render);
-    }
-
-    function render(timestamp, frame) {
-      const session = renderer.xr.getSession();
-      if (!session || !frame) {
-        renderer.render(scene, camera);
-        return;
-      }
-
-      if (!hitTestSourceRequested) {
-        requestHitTestSource(frame);
-      }
-
-      if (hitTestSource && xrRefSpace) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
-
-        if (hitTestResults.length > 0) {
-          const hit = hitTestResults[0];
-          const pose = hit.getPose(xrRefSpace);
-
-          if (pose) {
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-            reticle.matrix.decompose(
-              reticle.position,
-              reticle.quaternion,
-              reticle.scale
-            );
-
-            if (info.textContent.startsWith("바닥을 향해")) {
-              info.textContent = "조준원을 B1/B2 위치에 두고 [선택] 버튼";
-            }
-          }
-        } else {
-          reticle.visible = false;
-        }
-      }
-
-      renderer.render(scene, camera);
-    }
-  </script>
+  renderer.render(scene, camera);
+}
+</script>
 </body>
 </html>
