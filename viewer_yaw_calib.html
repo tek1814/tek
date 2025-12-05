@@ -218,12 +218,32 @@
     let gYaw   = 0.0;
     let gTrans = new THREE.Vector3();
 
-    function planToWorld(x_mm, y_mm) {
+    // 미러(반사)용: 현실 기준선(B1–B2)을 축으로 사용
+    let gAnchorWorld = null;       // B_anchor
+    let gDirWorld    = null;       // (B2 - B1).normalize()
+
+    function basePlanToWorld(x_mm, y_mm) {
       // DXF (x, y_mm) → 3D (x_m, 0, y_m), 이후 scale/회전/이동
       const p = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
       p.multiplyScalar(gScale);
       p.applyAxisAngle(Y_AXIS, gYaw);
       p.add(gTrans);
+      return p;
+    }
+
+    function planToWorld(x_mm, y_mm) {
+      let p = basePlanToWorld(x_mm, y_mm);
+
+      // --- B1–B2 선을 축으로 한 미러(세로축 mirror) 적용 ---
+      if (gAnchorWorld && gDirWorld) {
+        const r     = p.clone().sub(gAnchorWorld);       // anchor 기준 상대벡터
+        const dot   = gDirWorld.dot(r);
+        const rPar  = gDirWorld.clone().multiplyScalar(dot); // 선 방향 성분
+        const rPerp = r.clone().sub(rPar);                   // 선에 수직 성분
+        const rMir  = rPar.clone().sub(rPerp);               // 수직 성분 반전
+        p = gAnchorWorld.clone().add(rMir);
+      }
+
       return p;
     }
 
@@ -298,6 +318,10 @@
       gYaw   = best.yaw;
       gTrans = best.T;
 
+      // --- 미러 기준선 정보 저장: B1–B2 선 & anchor ---
+      gDirWorld = new THREE.Vector3().subVectors(B2, B1).normalize();
+      gAnchorWorld = (firstSelected === "B1" ? B1.clone() : B2.clone());
+
       redrawPlan();
 
       const yawDeg = gYaw * 180 / Math.PI;
@@ -306,10 +330,9 @@
         `도면 A1–A2 길이 = ${lenPlan.toFixed(3)} m\n` +
         `실세계 B1–B2 길이 = ${lenWorld.toFixed(3)} m\n` +
         `scale = ${gScale.toFixed(5)}\n` +
-        `yaw = ${yawDeg.toFixed(3)}°\n` +
-        `오차(다른 끝점) = ${best.error.toFixed(4)} m`;
+        `yaw = ${yawDeg.toFixed(3)}°`;
       setResult(msg);
-      setStatus("정합 완료");
+      setStatus("정합 + 세로축 미러 적용 완료");
     }
 
     // ===================== 사용자 입력 =========================
@@ -350,6 +373,8 @@
             planGroup.clear();
             B1 = B2 = null;
             firstSelected = null;
+            gAnchorWorld = null;
+            gDirWorld = null;
             pointSelect.disabled = true;
             btnMain.textContent = "START AR";
             setStatus("AR 세션 종료");
