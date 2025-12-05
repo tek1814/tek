@@ -389,10 +389,6 @@
     }
 
     // ===================== 렌더 루프 / hit-test =================
-    let xrRefSpace = null;
-    let hitTestSource = null;
-    let hitRequested = false;
-
     renderer.setAnimationLoop((time, frame) => {
       const session = renderer.xr.getSession();
       if (!session || !frame) {
