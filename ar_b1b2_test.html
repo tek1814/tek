@@ -17,7 +17,7 @@
     #overlay {
       position: fixed;
       inset: 0;
-      pointer-events: none; /* 기본은 클릭 통과 */
+      pointer-events: none;
     }
 
     #info {
@@ -32,6 +32,7 @@
       z-index: 20;
       white-space: nowrap;
     }
+
     #help {
       position: absolute;
       bottom: 60px;
@@ -45,39 +46,6 @@
       white-space: nowrap;
     }
 
-    /* 가운데 크로스헤어 */
-    #crosshair {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 30px;
-      height: 30px;
-      margin-left: -15px;
-      margin-top: -15px;
-      z-index: 15;
-    }
-    #crosshair:before,
-    #crosshair:after {
-      content: "";
-      position: absolute;
-      background: rgba(255,255,255,0.9);
-    }
-    #crosshair:before {
-      left: 50%;
-      top: 0;
-      width: 2px;
-      height: 100%;
-      transform: translateX(-50%);
-    }
-    #crosshair:after {
-      top: 50%;
-      left: 0;
-      width: 100%;
-      height: 2px;
-      transform: translateY(-50%);
-    }
-
-    /* 선택 버튼만 클릭 가능하게 */
     #selectBtn {
       position: absolute;
       bottom: 10px;
@@ -90,7 +58,7 @@
       background: rgba(0, 122, 255, 0.9);
       color: #fff;
       z-index: 25;
-      pointer-events: auto; /* 버튼은 클릭 허용 */
+      pointer-events: auto;
     }
   </style>
 </head>
@@ -98,8 +66,7 @@
   <!-- AR DOM Overlay -->
   <div id="overlay">
     <div id="info">AR 준비 중...</div>
-    <div id="help">바닥 인식 후: 링을 B1/B2 위치에 맞추고 [선택] 버튼으로 선택</div>
-    <div id="crosshair"></div>
+    <div id="help">바닥 인식 후: 십자(reticle)를 B1/B2 위치에 맞추고 [선택] 버튼</div>
     <button id="selectBtn">선택 (B1/B2)</button>
   </div>
 
@@ -117,7 +84,7 @@
     const help = document.getElementById("help");
     const selectBtn = document.getElementById("selectBtn");
 
-    // 평면에 붙어다니는 reticle (동그라미)
+    // 평면에 붙어다니는 3D 크로스헤어(reticle)
     let reticle;
 
     // B1, B2 저장용
@@ -148,16 +115,23 @@
       const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
-      // Reticle (바닥에 붙는 링)
-      const ringGeo = new THREE.RingGeometry(0.03, 0.035, 32);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        side: THREE.DoubleSide
-      });
-      reticle = new THREE.Mesh(ringGeo, ringMat);
-      reticle.rotation.x = -Math.PI / 2;
+      // ===== 3D 크로스헤어(십자) 만들기 =====
+      const size = 0.03; // 3cm 정도
+      const geom = new THREE.BufferGeometry();
+      const vertices = new Float32Array([
+        -size, 0, 0,  size, 0, 0,   // 가로선
+         0, 0, -size, 0, 0, size    // 세로선
+      ]);
+      geom.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xffffff });
+      const lines = new THREE.LineSegments(geom, mat);
+
+      reticle = new THREE.Object3D();
+      reticle.add(lines);
+      reticle.rotation.x = -Math.PI / 2; // 평면에 눕혀놓기
       reticle.visible = false;
       scene.add(reticle);
+      // ============================
 
       // ARButton: hit-test + dom-overlay 활성화
       const button = ARButton.createButton(renderer, {
@@ -185,7 +159,7 @@
     async function onSessionStart() {
       const session = renderer.xr.getSession();
 
-      info.textContent = "바닥을 향해 폰을 움직여 평면을 인식하세요...";
+      info.textContent = "바닥을 향해 폰을 크게 움직여 평면을 먼저 안정화하세요.";
 
       xrRefSpace = await session.requestReferenceSpace("local-floor").catch(() =>
         session.requestReferenceSpace("local")
@@ -298,7 +272,7 @@
             );
 
             if (info.textContent.startsWith("바닥을 향해")) {
-              info.textContent = "링을 위치시키고 [선택]으로 B1/B2 지정";
+              info.textContent = "십자를 B1/B2 위치에 두고 [선택] 버튼";
             }
           }
         } else {
