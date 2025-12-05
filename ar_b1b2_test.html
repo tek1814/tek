@@ -2,18 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>AR B1-B2 Distance Test</title>
+  <title>AR Reticle Stable Version</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-
   <style>
     body { margin:0; overflow:hidden; background:black; color:white; }
-    #overlay {
-      position: fixed; inset:0; pointer-events:none;
-    }
+    #overlay { position:fixed; inset:0; pointer-events:none; }
     #info {
       position:absolute; top:10px; left:50%; transform:translateX(-50%);
-      background:rgba(0,0,0,0.5); padding:6px 12px; border-radius:4px; z-index:20;
-      font-size:14px;
+      background:rgba(0,0,0,0.5); padding:6px 12px; border-radius:4px;
+      font-size:14px; z-index:20;
     }
     #selectBtn {
       position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
@@ -23,11 +20,11 @@
     }
   </style>
 </head>
-
 <body>
+
 <div id="overlay">
-  <div id="info">AR 준비 중...</div>
-  <button id="selectBtn">선택 (B1/B2)</button>
+  <div id="info">평면 스캔 중...</div>
+  <button id="selectBtn">선택</button>
 </div>
 
 <script type="module">
@@ -39,7 +36,7 @@ let hitTestSource = null;
 let hitTestSourceRequested = false;
 let referenceSpace = null;
 
-// 레티클(원+점)
+// 항상 표시되는 레티클
 let reticle;
 
 // B1/B2
@@ -57,13 +54,10 @@ function init() {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
 
-  // 광원
   const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
   scene.add(light);
 
-  // ─────────────────────────────
-  // Measure 스타일: 원 + 가운데 점 레티클
-  // ─────────────────────────────
+  // Measure 스타일: 원 + 가운데 점
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.03, 0.035, 48),
     new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide })
@@ -73,21 +67,19 @@ function init() {
     new THREE.CircleGeometry(0.006, 32),
     new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide })
   );
+
   dot.position.y = 0.001;
 
   reticle = new THREE.Group();
   reticle.add(ring);
   reticle.add(dot);
-  reticle.rotation.x = -Math.PI / 2;
-  reticle.visible = false;
-  scene.add(reticle);
-  // ─────────────────────────────
+  reticle.rotation.x = -Math.PI/2;
+  scene.add(reticle); // 항상 표시됨 (visible = true 유지)
 
-  // ARButton
   document.body.appendChild(ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay','local-floor'],
-    domOverlay: { root: document.getElementById('overlay') }
+    requiredFeatures:['hit-test'],
+    optionalFeatures:['dom-overlay','local-floor'],
+    domOverlay:{ root:document.getElementById('overlay') }
   }));
 
   renderer.xr.addEventListener("sessionstart", async () => {
@@ -96,8 +88,6 @@ function init() {
 
     hitTestSourceRequested = false;
     hitTestSource = null;
-
-    B1 = null; B2 = null;
   });
 
   document.getElementById("selectBtn").onclick = selectPoint;
@@ -106,31 +96,17 @@ function init() {
 function selectPoint() {
   const info = document.getElementById("info");
 
-  if (!reticle.visible) {
-    info.textContent = "평면을 먼저 인식하세요.";
-    return;
-  }
-
   const p = new THREE.Vector3();
   reticle.getWorldPosition(p);
 
   if (!B1) {
     B1 = p.clone();
     B2 = null;
-    info.textContent = `B1 지정: ${B1.x.toFixed(2)}, ${B1.z.toFixed(2)}`;
+    info.textContent = `B1: ${B1.x.toFixed(2)}, ${B1.z.toFixed(2)}`;
   } else if (!B2) {
     B2 = p.clone();
-
-    const dx = B2.x - B1.x;
-    const dy = B2.y - B1.y;
-    const dz = B2.z - B1.z;
-
-    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    info.textContent = `거리: ${dist.toFixed(3)} m`;
-
-    console.log("B1:", B1);
-    console.log("B2:", B2);
-    console.log("Distance:", dist);
+    const d = B1.distanceTo(B2);
+    info.textContent = `거리 = ${d.toFixed(3)} m`;
   } else {
     B1 = p.clone();
     B2 = null;
@@ -138,7 +114,9 @@ function selectPoint() {
   }
 }
 
-function animate() { renderer.setAnimationLoop(render); }
+function animate() {
+  renderer.setAnimationLoop(render);
+}
 
 function render(timestamp, frame) {
   const session = renderer.xr.getSession();
@@ -147,16 +125,20 @@ function render(timestamp, frame) {
     return;
   }
 
+  // hitTestSource 준비
   if (!hitTestSourceRequested) {
     const viewerSpacePromise = session.requestReferenceSpace('viewer');
     viewerSpacePromise.then(viewerSpace => {
-      session.requestHitTestSource({ space: viewerSpace }).then(source => {
-        hitTestSource = source;
-      });
+      session.requestHitTestSource({ space: viewerSpace })
+      .then(source => hitTestSource = source);
     });
     hitTestSourceRequested = true;
   }
 
+  // 기본값: 레티클은 카메라 앞 0.5m 위치
+  setReticleDefaultForward();
+
+  // hit-test 성공 시 해당 평면으로 스냅
   if (hitTestSource && referenceSpace) {
     const hitTestResults = frame.getHitTestResults(hitTestSource);
 
@@ -165,23 +147,31 @@ function render(timestamp, frame) {
       const pose = hit.getPose(referenceSpace);
 
       if (pose) {
-        reticle.visible = true;
         reticle.matrix.fromArray(pose.transform.matrix);
-        reticle.matrix.decompose(
-          reticle.position,
-          reticle.quaternion,
-          reticle.scale
-        );
-        document.getElementById("info").textContent =
-          "B1/B2 위치에 맞추고 [선택]";
+        reticle.matrix.decompose(reticle.position, reticle.quaternion, reticle.scale);
+
+        reticle.rotation.x = -Math.PI/2;
+        document.getElementById("info").textContent = "평면 인식됨";
       }
-    } else {
-      reticle.visible = false;
     }
   }
 
   renderer.render(scene, camera);
 }
+
+// hit-test 실패 시 사용하는 기본 위치
+function setReticleDefaultForward() {
+  const camMatrix = camera.matrixWorld;
+  const camPos = new THREE.Vector3().setFromMatrixPosition(camMatrix);
+
+  const forward = new THREE.Vector3(0,0,-1).applyMatrix4(camera.matrixWorld);
+  forward.sub(camPos).normalize();
+
+  reticle.position.copy(camPos).addScaledVector(forward, 0.5); // 0.5m 앞
+  reticle.quaternion.copy(camera.quaternion);
+  reticle.rotation.x = -Math.PI/2;
+}
+
 </script>
 </body>
 </html>
