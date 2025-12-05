@@ -163,7 +163,7 @@
         const json = await res.json();
         const layers = json.layers && typeof json.layers === "object" ? json.layers : json;
 
-        // A1/A2 중심점 (z = +y, 미러 없음)
+        // A1/A2 중심점 (z = +y)
         if (layers.A1 && layers.A1[0] && layers.A1[0].center) {
           const [x_mm, y_mm] = layers.A1[0].center;
           A1 = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
@@ -212,37 +212,44 @@
 
     let B1 = null;
     let B2 = null;
-    let firstSelected = null; // "B1" or "B2"
 
-    let gScale = 1.0;
-    let gYaw   = 0.0;
-    let gTrans = new THREE.Vector3();
+    // 정합 파라미터
+    let gScale = 1.0;                       // 도면 길이 → 현실 길이 스케일
+    let gPlanYaw = 0.0;                     // 도면에서 A1→A2 기준선의 yaw
+    const gA1M = new THREE.Vector3();       // A1 (m) 캐시
 
-    // 미러(반사)용: 현실 기준선(B1–B2)을 축으로 사용
-    let gAnchorWorld = null;       // B_anchor
-    let gDirWorld    = null;       // (B2 - B1).normalize()
-
-    function basePlanToWorld(x_mm, y_mm) {
-      // DXF (x, y_mm) → 3D (x_m, 0, y_m), 이후 scale/회전/이동
-      const p = new THREE.Vector3(x_mm * MM_TO_M, 0, y_mm * MM_TO_M);
-      p.multiplyScalar(gScale);
-      p.applyAxisAngle(Y_AXIS, gYaw);
-      p.add(gTrans);
-      return p;
-    }
+    const gExWorld = new THREE.Vector3(1,0,0); // 현실 로컬 x축 (B1→B2 방향)
+    const gEzWorld = new THREE.Vector3(0,0,1); // 현실 로컬 z축 (x축에 수직)
+    let   gAnchorWorld = null;                 // 현실 로컬 원점 (B1)
 
     function planToWorld(x_mm, y_mm) {
-      let p = basePlanToWorld(x_mm, y_mm);
+      // 1) 도면 좌표(mm) → m
+      const x_m = x_mm * MM_TO_M;
+      const z_m = y_mm * MM_TO_M;
 
-      // --- B1–B2 선을 축으로 한 미러(세로축 mirror) 적용 ---
-      if (gAnchorWorld && gDirWorld) {
-        const r     = p.clone().sub(gAnchorWorld);       // anchor 기준 상대벡터
-        const dot   = gDirWorld.dot(r);
-        const rPar  = gDirWorld.clone().multiplyScalar(dot); // 선 방향 성분
-        const rPerp = r.clone().sub(rPar);                   // 선에 수직 성분
-        const rMir  = rPar.clone().sub(rPerp);               // 수직 성분 반전
-        p = gAnchorWorld.clone().add(rMir);
+      // 2) A1을 원점으로 이동
+      const dx = x_m - gA1M.x;
+      const dz = z_m - gA1M.z;
+
+      // 3) 도면 기준선(A1→A2)을 x축으로 회전 (yaw = -gPlanYaw)
+      const cosP = Math.cos(-gPlanYaw);
+      const sinP = Math.sin(-gPlanYaw);
+      const lx = cosP * dx - sinP * dz;  // 도면 로컬 x
+      const lz = sinP * dx + cosP * dz;  // 도면 로컬 z
+
+      // 4) 스케일 적용
+      const sx = gScale * lx;
+      const sz = gScale * lz;
+
+      // 5) 현실 로컬 좌표 → 월드 좌표 (원점 B1, x축 gExWorld, z축 gEzWorld)
+      if (!gAnchorWorld) {
+        // 아직 정합 전이면 그냥 원점 주변에만 그리기
+        return new THREE.Vector3(sx, 0, sz);
       }
+
+      const p = gAnchorWorld.clone()
+        .add(gExWorld.clone().multiplyScalar(sx))
+        .add(gEzWorld.clone().multiplyScalar(sz));
 
       return p;
     }
@@ -260,79 +267,59 @@
       }
     }
 
-    // yaw 후보 하나에 대해 anchor/다른점 오차 계산
-    function evaluateYaw(yawCandidate, scale) {
-      let A_anchor, B_anchor, A_other, B_other;
-
-      if (firstSelected === "B1") {
-        A_anchor = A1; B_anchor = B1;
-        A_other  = A2; B_other  = B2;
-      } else {
-        A_anchor = A2; B_anchor = B2;
-        A_other  = A1; B_other  = B1;
-      }
-
-      // anchor에 변환 적용 후 translation 계산
-      const A_anchor_t = A_anchor.clone().multiplyScalar(scale);
-      A_anchor_t.applyAxisAngle(Y_AXIS, yawCandidate);
-      const T = B_anchor.clone().sub(A_anchor_t);
-
-      // 다른 끝점에 변환 적용
-      const A_other_t = A_other.clone().multiplyScalar(scale);
-      A_other_t.applyAxisAngle(Y_AXIS, yawCandidate);
-      A_other_t.add(T);
-
-      const error = A_other_t.distanceTo(B_other);
-      return { error, yaw: yawCandidate, T };
-    }
-
     function computeAlignment() {
-      // 1) 도면 기준선 A1→A2 (XZ 평면)
-      const vPlan = new THREE.Vector2(A2.x - A1.x, A2.z - A1.z);
-      const lenPlan = vPlan.length();
+      if (!A1 || !A2 || !B1 || !B2) return;
 
-      // 2) 현실 기준선 B1→B2
-      const vWorld = new THREE.Vector2(B2.x - B1.x, B2.z - B1.z);
-      const lenWorld = vWorld.length();
+      // 1) 도면 기준선 A1→A2 (XZ 평면)
+      const vPlanX = A2.x - A1.x;
+      const vPlanZ = A2.z - A1.z;
+      const lenPlan = Math.hypot(vPlanX, vPlanZ);
+
+      // 2) 현실 기준선 B1→B2 (XZ 평면)
+      const vWorldX = B2.x - B1.x;
+      const vWorldZ = B2.z - B1.z;
+      const lenWorld = Math.hypot(vWorldX, vWorldZ);
 
       if (lenPlan === 0 || lenWorld === 0) {
         setResult("길이가 0이어서 정합 불가");
         return;
       }
 
-      // 3) 기본 scale
-      const scale = lenWorld / lenPlan;
+      // 3) 스케일: A1–A2 길이를 B1–B2 길이에 맞추기
+      gScale = lenWorld / lenPlan;
 
-      // 4) 기본 yaw (방향 차이)
-      const angPlan  = Math.atan2(vPlan.y,  vPlan.x);
-      const angWorld = Math.atan2(vWorld.y, vWorld.x);
-      const baseYaw  = angWorld - angPlan;
+      // 4) 도면 기준선 yaw (도면 좌표계에서의 각도)
+      gPlanYaw = Math.atan2(vPlanZ, vPlanX);
+      gA1M.copy(A1);           // A1(m) 캐시
 
-      // 5) yaw 후보 두 개 (기본, 180° 뒤집힌 것)
-      const cand1 = evaluateYaw(baseYaw, scale);
-      const cand2 = evaluateYaw(baseYaw + Math.PI, scale);
+      // 5) 현실 로컬 좌표계 정의
+      //    - 원점: B1
+      //    - x축: (B2 - B1)를 바닥(XZ) 평면에 투영 후 정규화
+      //    - z축: x축에 수직인 방향
+      gAnchorWorld = B1.clone();
 
-      const best = cand1.error <= cand2.error ? cand1 : cand2;
+      const ex = new THREE.Vector3(vWorldX, 0, vWorldZ);
+      if (ex.lengthSq() === 0) {
+        ex.set(1, 0, 0);
+      }
+      ex.normalize();
+      const ez = new THREE.Vector3(-ex.z, 0, ex.x); // 90도 회전, 바닥 평면상 수직
 
-      gScale = scale;
-      gYaw   = best.yaw;
-      gTrans = best.T;
-
-      // --- 미러 기준선 정보 저장: B1–B2 선 & anchor ---
-      gDirWorld = new THREE.Vector3().subVectors(B2, B1).normalize();
-      gAnchorWorld = (firstSelected === "B1" ? B1.clone() : B2.clone());
+      gExWorld.copy(ex);
+      gEzWorld.copy(ez);
 
       redrawPlan();
 
-      const yawDeg = gYaw * 180 / Math.PI;
+      const yawWorld = Math.atan2(ex.z, ex.x); // 세계 좌표계에서 B1→B2 yaw
       const msg =
-        `Anchor: ${firstSelected} (→ ${firstSelected === "B1" ? "A1" : "A2"})\n` +
+        `Anchor: B1 (→ A1)\n` +
         `도면 A1–A2 길이 = ${lenPlan.toFixed(3)} m\n` +
         `실세계 B1–B2 길이 = ${lenWorld.toFixed(3)} m\n` +
         `scale = ${gScale.toFixed(5)}\n` +
-        `yaw = ${yawDeg.toFixed(3)}°`;
+        `planYaw(A1→A2) = ${(gPlanYaw * 180 / Math.PI).toFixed(3)}°\n` +
+        `worldYaw(B1→B2) = ${(yawWorld * 180 / Math.PI).toFixed(3)}°`;
       setResult(msg);
-      setStatus("정합 + 세로축 미러 적용 완료");
+      setStatus("정합 완료 (B1 = 원점, B2 = x축)");
     }
 
     // ===================== 사용자 입력 =========================
@@ -365,23 +352,21 @@
           });
 
           session.addEventListener("end", () => {
-            xrSession = null;
-            xrRefSpace = null;
-            hitTestSource = null;
-            hitRequested = false;
+            xrSession      = null;
+            xrRefSpace     = null;
+            hitTestSource  = null;
+            hitRequested   = false;
             reticle.visible = false;
             planGroup.clear();
             B1 = B2 = null;
-            firstSelected = null;
             gAnchorWorld = null;
-            gDirWorld = null;
             pointSelect.disabled = true;
-            btnMain.textContent = "START AR";
+            btnMain.textContent  = "START AR";
             setStatus("AR 세션 종료");
           });
 
           pointSelect.disabled = false;
-          btnMain.textContent = "선택";
+          btnMain.textContent  = "선택";
           setStatus("AR 시작됨. B1/B2 선택");
         })
         .catch((err) => {
@@ -397,8 +382,6 @@
       }
       const pos = reticle.position.clone();
       const sel = pointSelect.value; // "B1" or "B2"
-
-      if (!firstSelected) firstSelected = sel;
 
       if (sel === "B1") {
         B1 = pos;
