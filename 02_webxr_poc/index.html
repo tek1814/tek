@@ -1,32 +1,124 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>WebXR AR Debug (Babylon)</title>
+  <title>WebXR AR Debug (Plan)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
       width: 100%;
       height: 100%;
-      margin: 0;
-      overflow: hidden;
-      touch-action: none;
-      background: #000;
+      background: #222437;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     #renderCanvas {
       width: 100%;
       height: 100%;
+      touch-action: none;
       display: block;
     }
+
+    /* ----- UI ----- */
+    #ui-root {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      font-size: 12px;
+      line-height: 1.4;
+      pointer-events: none;
+    }
+    .ui-panel {
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      pointer-events: auto;
+      min-width: 220px;
+    }
+    .ui-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    .ui-row {
+      margin-top: 4px;
+    }
+    .ui-label {
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .ui-value {
+      font-family: "Consolas", "SF Mono", monospace;
+      font-size: 11px;
+    }
+    select, button {
+      font-size: 12px;
+    }
+    button {
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 0;
+      cursor: pointer;
+    }
+    button:active {
+      transform: translateY(1px);
+    }
   </style>
-  <!-- Babylon.js CDN -->
+
+  <!-- PC 디버깅용 WebXR polyfill (실기기에서는 무시됨) -->
+  <script src="https://unpkg.com/webxr-polyfill@latest/build/webxr-polyfill.min.js"></script>
+  <!-- Babylon.js core -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 </head>
 <body>
-  <canvas id="renderCanvas"></canvas>
+  <!-- 화면 왼쪽 상단 UI -->
+  <div id="ui-root">
+    <div class="ui-panel">
+      <div class="ui-title">기준점 선택 / Hit 상태</div>
 
-  <!-- 우리 코드 -->
-  <script src="./app-webxr.js"></script>
+      <div class="ui-row">
+        <span class="ui-label">기준점:</span>
+        <select id="pointSelect">
+          <option value="b1">b1 (기준점 1)</option>
+          <option value="b2">b2 (기준점 2)</option>
+        </select>
+        <button id="btnSet">선택</button>
+      </div>
+
+      <div class="ui-row">
+        <span class="ui-label">Hit:</span>
+        <span id="ui-hit" class="ui-value">-</span>
+      </div>
+      <div class="ui-row">
+        <span class="ui-label">b1:</span>
+        <span id="ui-b1" class="ui-value">-</span>
+      </div>
+      <div class="ui-row">
+        <span class="ui-label">b2:</span>
+        <span id="ui-b2" class="ui-value">-</span>
+      </div>
+    </div>
+
+    <div class="ui-panel">
+      <div class="ui-title">정합 결과 (테스트용)</div>
+      <div class="ui-row">
+        <span class="ui-label">Align:</span>
+        <span id="ui-align" class="ui-value">-</span>
+      </div>
+      <div class="ui-row" style="margin-top:4px; font-size:11px;">
+        화면 중앙 레티클이 <b>맞닿은 위치</b>가 Hit 입니다.<br />
+        1) 드롭다운에서 b1 또는 b2 선택<br />
+        2) 레티클 위치 맞춘 뒤 <b>선택</b> 버튼 클릭
+      </div>
+    </div>
+  </div>
+
+  <canvas id="renderCanvas"></canvas>
+  <script src="app-webxr.js"></script>
 </body>
 </html>
