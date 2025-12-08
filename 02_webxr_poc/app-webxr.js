@@ -6,19 +6,19 @@ window.addEventListener("DOMContentLoaded", () => {
     const scene = new BABYLON.Scene(engine);
 
     // =====================================================
-    // b1, b2 저장 변수 (AR 기준점)
+    // b1, b2 저장 변수 (AR에서 찍은 두 기준점)
     // =====================================================
     let b1 = null;
     let b2 = null;
 
     // =====================================================
-    // 기본 카메라 / 조명
+    // 기본 카메라 / 조명 (AR 아니어도 화면 보이도록)
     // =====================================================
     const camera = new BABYLON.ArcRotateCamera(
       "camera",
       Math.PI / 2,
       Math.PI / 3,
-      3,
+      8,
       new BABYLON.Vector3(0, 1, 0),
       scene
     );
@@ -35,7 +35,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // =====================================================
     const drawingRoot = new BABYLON.TransformNode("drawingRoot", scene);
 
-    // 테스트용 도면 바닥 Plane
+    // 테스트용 바닥 Plane (도면 위치 확인용, 나중에 필요 없으면 주석 처리)
     const drawingPlane = BABYLON.MeshBuilder.CreateGround(
       "drawingPlane",
       { width: 2, height: 2 },
@@ -51,10 +51,10 @@ window.addEventListener("DOMContentLoaded", () => {
     // Office_2.json 로드해서 라인 도면 생성
     // =====================================================
     async function loadPlan(scene) {
-      const scale2d = 0.001; // 필요 시 조정 (예: mm → m)
+      const scale2d = 0.001; // mm → m 정도라고 가정
 
       const res = await fetch("Office_2.json");
-      const data = await res.json();   // { layers: { ... } }
+      const data = await res.json(); // { layers: { ... } }
 
       const lines = [];
 
@@ -92,16 +92,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     // =====================================================
-    // 도면 좌표계 A1, A2 (테스트용 – 도면 기준 두 점)
+    // 도면 좌표계 A1, A2 (도면 기준 두 점: 1m 간격이라고 가정)
     // =====================================================
-    const a1 = new BABYLON.Vector2(-0.5, 0.0);
-    const a2 = new BABYLON.Vector2(0.5, 0.0);
+    const a1 = new BABYLON.Vector2(-0.5, 0.0); // (-0.5, 0)
+    const a2 = new BABYLON.Vector2(0.5, 0.0);  // (0.5, 0)
 
     // 도면 로드
     await loadPlan(scene);
 
     // =====================================================
-    // Hit Marker (HitTest 위치 표시용)
+    // Hit Marker (HitTest 위치 표시용 빨간 점)
     // =====================================================
     const hitMarker = BABYLON.MeshBuilder.CreateSphere(
       "hitMarker",
@@ -117,8 +117,16 @@ window.addEventListener("DOMContentLoaded", () => {
     // WebXR 시작
     // =====================================================
     const xrHelper = await scene.createDefaultXRExperienceAsync({
-      uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
+      uiOptions: {
+        sessionMode: "immersive-ar",
+        referenceSpaceType: "local-floor",
+      },
       optionalFeatures: true,
+    });
+
+    // XR 상태 로그 (디버그용)
+    xrHelper.baseExperience.onStateChangedObservable.add((state) => {
+      console.log("XR state:", state);
     });
 
     // =====================================================
@@ -133,10 +141,11 @@ window.addEventListener("DOMContentLoaded", () => {
         offsetRay: new BABYLON.Ray(
           new BABYLON.Vector3(0, 0, 0),
           new BABYLON.Vector3(0, 0, 1)
-        )
+        ),
       }
     );
 
+    // HitTest 콜백: 평면이 잡히면 hitMarker 위치 업데이트
     hitTest.onHitTestResultObservable.add((results) => {
       if (!results || results.length === 0) {
         hitMarker.isVisible = false;
@@ -176,71 +185,72 @@ window.addEventListener("DOMContentLoaded", () => {
       // 2) 스케일
       const scale = lenB / lenA;
 
-      // 3) yaw 각도
+      // 3) yaw 각도 (도면 → AR)
       const angleA = Math.atan2(aVec.y, aVec.x);
       const angleB = Math.atan2(bVec.y, bVec.x);
       const yaw = angleB - angleA;
 
-      // 4) 회전 쿼터니언 + 회전 행렬 (구버전 Babylon 호환 방식)
+      // 4) 변환 행렬 계산 (스케일 + 회전)
+      const scaleVec = new BABYLON.Vector3(scale, 1, scale);
       const rotQuat = BABYLON.Quaternion.FromEulerAngles(0, yaw, 0);
-      const rotMat = BABYLON.Matrix.Identity();
-      rotQuat.toRotationMatrix(rotMat);
 
-      // 5) 평행이동 (도면의 a1 이 b1로 가도록)
-      const localA1 = new BABYLON.Vector3(a1.x, 0, a1.y).scale(scale);
-      const rotatedA1 = BABYLON.Vector3.TransformCoordinates(localA1, rotMat);
-      const translation = b1.subtract(rotatedA1);
+      const a1_3d = new BABYLON.Vector3(a1.x, 0, a1.y);
 
-      // 6) drawingRoot에 적용
-      drawingRoot.scaling = new BABYLON.Vector3(scale, scale, scale);
-      drawingRoot.rotationQuaternion = rotQuat;
+      const mNoTrans = BABYLON.Matrix.Compose(
+        scaleVec,
+        rotQuat,
+        BABYLON.Vector3.Zero()
+      );
+      const a1Transformed = BABYLON.Vector3.TransformCoordinates(
+        a1_3d,
+        mNoTrans
+      );
+
+      // 5) 평행이동: 변환된 a1이 b1에 오도록
+      const translation = b1.subtract(a1Transformed);
+
+      // drawingRoot에 최종 Transform 적용
+      drawingRoot.scaling = scaleVec;
+      drawingRoot.rotation = new BABYLON.Vector3(0, yaw, 0);
       drawingRoot.position = translation;
 
       console.log("== Align Result ==");
       console.log("scale:", scale);
-      console.log("yaw deg:", yaw * 180 / Math.PI);
+      console.log("yaw deg:", (yaw * 180 / Math.PI).toFixed(3));
       console.log("translation:", translation);
     }
 
     // =====================================================
-    // 키보드 입력: 1 → b1, 2 → b2(+1m), 3 → 정합
+    // 키보드 입력: 1 → b1, 2 → b2, 3 → 정합 실행
     // =====================================================
     window.addEventListener("keydown", (event) => {
-      if ((event.key === "1" || event.key === "2") && !hitMarker.isVisible) {
-        console.warn("HitTest 결과 없음");
-        return;
-      }
-
-      // b1 저장
       if (event.key === "1") {
         b1 = hitMarker.position.clone();
         console.log("b1 SET:", b1);
       }
 
-      // b2 저장 (+1m 오프셋: 에뮬레이터가 같은 점만 줄 때 테스트용)
       if (event.key === "2") {
-        if (!b1) {
-          console.warn("먼저 b1을 저장하세요 (키 1)");
-          return;
-        }
-        b2 = hitMarker.position.clone().add(new BABYLON.Vector3(1, 0, 0));
+        b2 = hitMarker.position.clone();
         console.log("b2 SET:", b2);
       }
 
-      // 정합 실행
       if (event.key === "3") {
         alignDrawingWithAB();
       }
     });
 
     // =====================================================
-    // 렌더링 루프
+    // 렌더 루프
     // =====================================================
     engine.runRenderLoop(() => {
       scene.render();
     });
 
-    window.addEventListener("resize", () => engine.resize());
+    window.addEventListener("resize", () => {
+      engine.resize();
+    });
+
+    return scene;
   };
 
   createScene();
