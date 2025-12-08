@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>Office_2 AR Alignment</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <!-- Babylon.js CDN -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+
+    <style>
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            touch-action: none;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #info {
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            padding: 6px 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: #fff;
+            font-size: 12px;
+            z-index: 10;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+<div id="info">
+    1) AR 세션 시작 후 바닥을 스캔합니다.<br/>
+    2) 화면을 탭해서 b1을 찍습니다.<br/>
+    3) 다시 탭해서 b2를 찍으면 도면이 A1–A2 기준으로 정합되어 나타납니다.<br/>
+    빨간 구: A1, 파란 구: A2, 노란 구: b1, 초록 구: b2
+</div>
+<canvas id="renderCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById("renderCanvas");
+    const engine = new BABYLON.Engine(canvas, true);
+
+    // Office_2.json에서 읽어온 A1 / A2 좌표 (도면 좌표계, 단위 동일)
+    // A1: [1499.999999999994, -1.847e-13]
+    // A2: [3.4e-15, -7.1e-15]
+    const A1_2D = new BABYLON.Vector2(1499.999999999994, -1.847e-13);
+    const A2_2D = new BABYLON.Vector2(3.4e-15, -7.1e-15);
+
+    async function createScene() {
+        const scene = new BABYLON.Scene(engine);
+        scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
+
+        // 카메라는 XR에서 실제 카메라로 대체되지만, 에디터/PC에서 열었을 때를 위한 기본 카메라
+        const camera = new BABYLON.UniversalCamera("camera", new BABYLON.Vector3(0, 1.6, -5), scene);
+        camera.setTarget(BABYLON.Vector3.Zero());
+        camera.attachControl(canvas, true);
+
+        const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+        light.intensity = 1.0;
+
+        // 도면 전체를 담을 루트 노드
+        const floorplanRoot = new BABYLON.TransformNode("floorplanRoot", scene);
+        floorplanRoot.setEnabled(false); // 정합되기 전까지 숨김
+
+        // 도면 로드: Office_2.json을 읽어서 라인/폴리라인을 표시
+        async function loadFloorplan() {
+            const response = await fetch("Office_2.json");
+            const data = await response.json();
+            const layers = data.layers;
+
+            // 보여줄 레이어 목록 (필요시 조정 가능)
+            const includeLayers = [
+                "A-WALL",
+                "A-FLOR",
+                "A-DOOR",
+                "A-GLAZ",
+                "A1",
+                "A2"
+            ];
+
+            for (const [layerName, entities] of Object.entries(layers)) {
+                if (!includeLayers.includes(layerName)) continue;
+
+                for (let i = 0; i < entities.length; i++) {
+                    const ent = entities[i];
+
+                    if (ent.type === "LINE") {
+                        const s = ent.start;
+                        const e = ent.end;
+
+                        const points = [
+                            new BABYLON.Vector3(s[0], 0, s[1]),
+                            new BABYLON.Vector3(e[0], 0, e[1])
+                        ];
+                        const line = BABYLON.MeshBuilder.CreateLines(
+                            `line_${layerName}_${i}`,
+                            { points },
+                            scene
+                        );
+                        line.color = new BABYLON.Color3(0.1, 0.1, 0.1);
+                        line.parent = floorplanRoot;
+                    }
+                    else if (ent.type === "LWPOLYLINE") {
+                        const pts = ent.points.map(p => new BABYLON.Vector3(p[0], 0, p[1]));
+                        if (pts.length >= 2) {
+                            const pl = BABYLON.MeshBuilder.CreateLines(
+                                `poly_${layerName}_${i}`,
+                                { points: pts },
+                                scene
+                            );
+                            pl.color = new BABYLON.Color3(0.15, 0.15, 0.15);
+                            pl.parent = floorplanRoot;
+                        }
+                    }
+                    // CIRCLE은 A1, A2 마커로 별도 sphere를 만들 것이므로 여기서는 생략 가능
+                }
+            }
+
+            // A1 / A2 마커 (도면 좌표 기준, X → X, Y → Z)
+            function createAmarker(pos2D, name, color) {
+                const sphere = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 80 }, scene);
+                sphere.position = new BABYLON.Vector3(pos2D.x, 0, pos2D.y);
+                const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
+                mat.emissiveColor = color;
+                mat.diffuseColor = color;
+                mat.specularColor = BABYLON.Color3.Black();
+                sphere.material = mat;
+                sphere.parent = floorplanRoot;
+            }
+
+            createAmarker(A1_2D, "A1_marker", new BABYLON.Color3(1, 0, 0)); // 빨강
+            createAmarker(A2_2D, "A2_marker", new BABYLON.Color3(0, 0, 1)); // 파랑
+        }
+
+        await loadFloorplan();
+
+        // WebXR AR 세팅
+        const xrHelper = await scene.createDefaultXRExperienceAsync({
+            uiOptions: {
+                sessionMode: "immersive-ar",
+                referenceSpaceType: "local-floor"
+            },
+            optionalFeatures: true
+        });
+
+        const fm = xrHelper.baseExperience.featuresManager;
+
+        // 히트테스트 (바닥 찾기)
+        const hitTest = fm.enableFeature(
+            BABYLON.WebXRHitTest,
+            "latest",
+            {
+                offsetRay: new BABYLON.Ray(
+                    new BABYLON.Vector3(0, 1.5, 0),
+                    new BABYLON.Vector3(0, -1, 0)
+                )
+            }
+        );
+
+        let latestHit = null;
+        hitTest.onHitTestResultObservable.add(results => {
+            if (results.length > 0) {
+                latestHit = results[0];
+            }
+        });
+
+        // b1, b2 (세계 좌표)와 표시용 마커
+        let b1 = null;
+        let b2 = null;
+        let aligned = false;
+
+        function createWorldMarker(position, name, color) {
+            const sphere = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 80 }, scene);
+            sphere.position = position.clone();
+            const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
+            mat.emissiveColor = color;
+            mat.diffuseColor = color;
+            mat.specularColor = BABYLON.Color3.Black();
+            sphere.material = mat;
+            return sphere;
+        }
+
+        let b1Marker = null;
+        let b2Marker = null;
+
+        // A1–A2 (도면) ↔ b1–b2 (세계) 정합
+        function alignFloorplan() {
+            if (!b1 || !b2) return;
+
+            // 도면 상 A1, A2를 3D 평면 (Y=0) 위의 좌표로 변환
+            const a1Local = new BABYLON.Vector3(A1_2D.x, 0, A1_2D.y);
+            const a2Local = new BABYLON.Vector3(A2_2D.x, 0, A2_2D.y);
+
+            const dPlan = a2Local.subtract(a1Local);
+            const lenPlan = dPlan.length();
+            if (lenPlan < 1e-6) return;
+
+            const dWorld = b2.subtract(b1);
+            dWorld.y = 0; // 수평면으로 투영
+            const lenWorld = dWorld.length();
+            if (lenWorld < 1e-6) return;
+
+            const scale = lenWorld / lenPlan;
+
+            // 각도 계산 (XZ 평면에서의 yaw)
+            const anglePlan = Math.atan2(dPlan.z, dPlan.x);
+            const angleWorld = Math.atan2(dWorld.z, dWorld.x);
+            const yaw = angleWorld - anglePlan;
+
+            // 스케일 + yaw 적용
+            floorplanRoot.scaling.set(scale, scale, scale);
+            floorplanRoot.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, yaw);
+            floorplanRoot.computeWorldMatrix(true);
+
+            // A1 위치를 b1에 맞추기 위한 평행이동
+            const a1WorldBeforeTranslation = BABYLON.Vector3.TransformCoordinates(
+                a1Local,
+                floorplanRoot.getWorldMatrix()
+            );
+            const offset = b1.subtract(a1WorldBeforeTranslation);
+            floorplanRoot.position.addInPlace(offset);
+            floorplanRoot.computeWorldMatrix(true);
+
+            floorplanRoot.setEnabled(true);
+            aligned = true;
+        }
+
+        // 화면 탭 이벤트 처리 (screen input)
+        xrHelper.baseExperience.sessionManager.onInputSourceAddedObservable.add(input => {
+            if (input.targetRayMode === "screen") {
+                input.onMeshSelectedObservable.add(() => {
+                    if (!latestHit) return;
+
+                    const hitPos = latestHit.position;
+
+                    // 첫 번째 탭: b1
+                    if (!b1) {
+                        b1 = hitPos.clone();
+                        if (b1Marker) b1Marker.dispose();
+                        b1Marker = createWorldMarker(b1, "b1_marker", new BABYLON.Color3(1, 1, 0)); // 노랑
+                    }
+                    // 두 번째 탭: b2
+                    else if (!b2) {
+                        b2 = hitPos.clone();
+                        if (b2Marker) b2Marker.dispose();
+                        b2Marker = createWorldMarker(b2, "b2_marker", new BABYLON.Color3(0, 1, 0)); // 초록
+
+                        alignFloorplan();
+                    }
+                    // 이후 탭은 무시 (원하면 다시 정합하는 로직으로 바꿀 수 있음)
+                });
+            }
+        });
+
+        return scene;
+    }
+
+    let scene = null;
+    createScene().then(s => {
+        scene = s;
+        engine.runRenderLoop(() => {
+            if (scene) {
+                scene.render();
+            }
+        });
+    });
+
+    window.addEventListener("resize", () => {
+        engine.resize();
+    });
+</script>
+</body>
+</html>
