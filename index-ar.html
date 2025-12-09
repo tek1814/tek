@@ -1,322 +1,406 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8" />
-    <title>Office_2 AR Alignment</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta charset="UTF-8" />
+  <title>Office_2 AR Alignment</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  />
 
-    <!-- Babylon.js CDN -->
-    <script src="https://cdn.babylonjs.com/babylon.js"></script>
-    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  <!-- Babylon.js CDN -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
-    <style>
-        html, body {
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            overflow: hidden;
-            touch-action: none;
-            background: #000;
-        }
-        #renderCanvas {
-            width: 100%;
-            height: 100%;
-            touch-action: none;
-            display: block;
-        }
-        #info {
-            position: absolute;
-            left: 10px;
-            top: 10px;
-            padding: 6px 10px;
-            background: rgba(0, 0, 0, 0.5);
-            color: #fff;
-            font-size: 12px;
-            z-index: 10;
-            max-width: 80%;
-        }
-        #enterARBtn {
-            position: absolute;
-            right: 10px;
-            bottom: 10px;
-            z-index: 11;
-            padding: 10px 16px;
-            font-size: 14px;
-            border-radius: 6px;
-            border: none;
-            background: rgba(0, 122, 255, 0.9);
-            color: #fff;
-            display: none; /* XR 준비되면 표시 */
-        }
-    </style>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      touch-action: none;
+      background: #000;
+    }
+
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      display: block;
+    }
+
+    #info {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      font-size: 12px;
+      z-index: 10;
+      max-width: 80%;
+      line-height: 1.4;
+    }
+
+    #enterARBtn {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      z-index: 11;
+      padding: 10px 16px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: none;
+      background: rgba(0, 122, 255, 0.9);
+      color: #fff;
+      display: none; /* XR 준비되면 표시 */
+    }
+  </style>
 </head>
 <body>
-<div id="info">
-    1) 아래 <b>AR 시작</b> 버튼을 누른 뒤 바닥을 스캔합니다.<br/>
-    2) 화면을 탭해서 b1을 찍습니다.<br/>
-    3) 다시 탭해서 b2를 찍으면 도면이 A1–A2 기준으로 정합되어 나타납니다.<br/>
+  <div id="info">
+    1) 아래 <b>AR 시작</b> 버튼을 누른 뒤 바닥을 스캔합니다.<br />
+    2) 화면을 탭해서 첫 번째 점 b1을 찍습니다.<br />
+    3) 다시 탭해서 두 번째 점 b2를 찍으면 도면이 A1–A2 기준으로 정합되어
+    나타납니다.<br />
     빨간 구: A1, 파란 구: A2, 노란 구: b1, 초록 구: b2
-</div>
-<button id="enterARBtn">AR 시작</button>
-<canvas id="renderCanvas"></canvas>
+  </div>
+  <button id="enterARBtn">AR 시작</button>
+  <canvas id="renderCanvas"></canvas>
 
-<script>
+  <script>
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true);
-
     const infoDiv = document.getElementById("info");
     const enterARBtn = document.getElementById("enterARBtn");
 
     // Office_2.json에서 읽어온 A1 / A2 좌표 (도면 좌표계, 단위 동일)
-    const A1_2D = new BABYLON.Vector2(1499.999999999994, -1.847e-13);
-    const A2_2D = new BABYLON.Vector2(3.4e-15, -7.1e-15);
+    const A1_2D = new BABYLON.Vector2(
+      1499.999999999994,
+      -1.847e-13
+    );
+    const A2_2D = new BABYLON.Vector2(
+      3.4e-15,
+      -7.1e-15
+    );
+
+    let xrHelper = null;
 
     async function createScene() {
-        const scene = new BABYLON.Scene(engine);
-        scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
+      const scene = new BABYLON.Scene(engine);
+      scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
 
-        // PC 디버깅용 카메라 (XR에서는 실제 카메라로 대체됨)
-        const camera = new BABYLON.UniversalCamera("camera",
-            new BABYLON.Vector3(0, 1000, -3000), scene);
-        camera.setTarget(BABYLON.Vector3.Zero());
-        camera.attachControl(canvas, true);
+      // PC 디버깅용 카메라 (XR에서는 실제 카메라로 대체됨)
+      const camera = new BABYLON.UniversalCamera(
+        "camera",
+        new BABYLON.Vector3(0, 1000, -3000),
+        scene
+      );
+      camera.setTarget(BABYLON.Vector3.Zero());
+      camera.attachControl(canvas, true);
 
-        const light = new BABYLON.HemisphericLight("light",
-            new BABYLON.Vector3(0, 1, 0), scene);
-        light.intensity = 1.0;
+      const light = new BABYLON.HemisphericLight(
+        "light",
+        new BABYLON.Vector3(0, 1, 0),
+        scene
+      );
+      light.intensity = 1.0;
 
-        // 도면 전체를 담을 루트 노드
-        const floorplanRoot = new BABYLON.TransformNode("floorplanRoot", scene);
-        floorplanRoot.setEnabled(false); // 정합되기 전까지 숨김
+      // 도면 전체를 담을 루트 노드
+      const floorplanRoot = new BABYLON.TransformNode(
+        "floorplanRoot",
+        scene
+      );
+      floorplanRoot.setEnabled(false); // 정합되기 전까지 숨김
 
-        // 도면 로드: Office_2.json을 읽어서 라인/폴리라인을 표시
-        async function loadFloorplan() {
-            try {
-                const response = await fetch("Office_2.json");
-                const data = await response.json();
-                const layers = data.layers;
-
-                const includeLayers = [
-                    "A-WALL",
-                    "A-FLOR",
-                    "A-DOOR",
-                    "A-GLAZ",
-                    "A1",
-                    "A2"
-                ];
-
-                for (const [layerName, entities] of Object.entries(layers)) {
-                    if (!includeLayers.includes(layerName)) continue;
-
-                    for (let i = 0; i < entities.length; i++) {
-                        const ent = entities[i];
-
-                        if (ent.type === "LINE") {
-                            const s = ent.start;
-                            const e = ent.end;
-
-                            const points = [
-                                new BABYLON.Vector3(s[0], 0, s[1]),
-                                new BABYLON.Vector3(e[0], 0, e[1])
-                            ];
-                            const line = BABYLON.MeshBuilder.CreateLines(
-                                `line_${layerName}_${i}`,
-                                { points },
-                                scene
-                            );
-                            line.color = new BABYLON.Color3(0.1, 0.1, 0.1);
-                            line.parent = floorplanRoot;
-                        }
-                        else if (ent.type === "LWPOLYLINE") {
-                            const pts = ent.points.map(p => new BABYLON.Vector3(p[0], 0, p[1]));
-                            if (pts.length >= 2) {
-                                const pl = BABYLON.MeshBuilder.CreateLines(
-                                    `poly_${layerName}_${i}`,
-                                    { points: pts },
-                                    scene
-                                );
-                                pl.color = new BABYLON.Color3(0.15, 0.15, 0.15);
-                                pl.parent = floorplanRoot;
-                            }
-                        }
-                    }
-                }
-
-                // A1 / A2 마커
-                function createAmarker(pos2D, name, color) {
-                    const sphere = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 80 }, scene);
-                    sphere.position = new BABYLON.Vector3(pos2D.x, 0, pos2D.y);
-                    const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
-                    mat.emissiveColor = color;
-                    mat.diffuseColor = color;
-                    mat.specularColor = BABYLON.Color3.Black();
-                    sphere.material = mat;
-                    sphere.parent = floorplanRoot;
-                }
-
-                createAmarker(A1_2D, "A1_marker", new BABYLON.Color3(1, 0, 0)); // 빨강
-                createAmarker(A2_2D, "A2_marker", new BABYLON.Color3(0, 0, 1)); // 파랑
-            } catch (e) {
-                console.error(e);
-                infoDiv.innerHTML += "<br>도면(Office_2.json) 로드 중 오류가 발생했습니다.";
-            }
-        }
-
-        await loadFloorplan();
-
-        // WebXR AR 세팅
-        let xrHelper = null;
+      // 도면 로드: Office_2.json
+      async function loadFloorplan() {
         try {
-            xrHelper = await scene.createDefaultXRExperienceAsync({
-                uiOptions: {
-                    sessionMode: "immersive-ar",
-                    referenceSpaceType: "local-floor"
-                },
-                optionalFeatures: true
-            });
-        } catch (e) {
-            console.error(e);
-            infoDiv.innerHTML += "<br>이 기기에서 WebXR AR 세션을 시작할 수 없습니다.";
-            return scene;
-        }
+          const response = await fetch("Office_2.json");
+          const data = await response.json();
+          const layers = data.layers;
 
-        if (!xrHelper || !xrHelper.baseExperience) {
-            infoDiv.innerHTML += "<br>이 기기/브라우저는 WebXR AR을 지원하지 않습니다. Chrome 최신 버전과 ARCore(Play Services for AR)를 확인하세요.";
-            return scene;
-        }
+          const includeLayers = [
+            "A-WALL",
+            "A-FLOR",
+            "A-DOOR",
+            "A-GLAZ",
+            "A1",
+            "A2"
+          ];
 
-        // AR 시작 버튼 노출
-        enterARBtn.style.display = "block";
-        enterARBtn.onclick = () => {
-            xrHelper.baseExperience
-                .enterXRAsync("immersive-ar", "local-floor")
-                .catch(err => {
-                    console.error(err);
-                    infoDiv.innerHTML += "<br>AR 세션 시작에 실패했습니다: " + err.message;
-                });
-        };
+          for (const [layerName, entities] of Object.entries(layers)) {
+            if (!includeLayers.includes(layerName)) continue;
 
-        const fm = xrHelper.baseExperience.featuresManager;
+            for (let i = 0; i < entities.length; i++) {
+              const ent = entities[i];
 
-        // 히트테스트 (바닥 찾기)
-        const hitTest = fm.enableFeature(
-            BABYLON.WebXRHitTest,
-            "latest",
-            {
-                offsetRay: new BABYLON.Ray(
-                    new BABYLON.Vector3(0, 1.5, 0),
-                    new BABYLON.Vector3(0, -1, 0)
-                )
-            }
-        );
+              if (ent.type === "LINE") {
+                const s = ent.start;
+                const e = ent.end;
 
-        let latestHit = null;
-        if (hitTest) {
-            hitTest.onHitTestResultObservable.add(results => {
-                if (results.length > 0) {
-                    latestHit = results[0];
+                const points = [
+                  new BABYLON.Vector3(s[0], 0, s[1]),
+                  new BABYLON.Vector3(e[0], 0, e[1])
+                ];
+                const line = BABYLON.MeshBuilder.CreateLines(
+                  `line_${layerName}_${i}`,
+                  { points },
+                  scene
+                );
+                line.color = new BABYLON.Color3(0.1, 0.1, 0.1);
+                line.parent = floorplanRoot;
+              } else if (ent.type === "LWPOLYLINE") {
+                const pts = ent.points.map(
+                  (p) => new BABYLON.Vector3(p[0], 0, p[1])
+                );
+                if (pts.length >= 2) {
+                  const pl = BABYLON.MeshBuilder.CreateLines(
+                    `poly_${layerName}_${i}`,
+                    { points: pts },
+                    scene
+                  );
+                  pl.color = new BABYLON.Color3(0.15, 0.15, 0.15);
+                  pl.parent = floorplanRoot;
                 }
-            });
-        } else {
-            infoDiv.innerHTML += "<br>이 기기에서는 AR 히트테스트를 사용할 수 없습니다.";
-        }
+              }
+            }
+          }
 
-        // b1, b2 (세계 좌표)와 표시용 마커
-        let b1 = null;
-        let b2 = null;
-
-        function createWorldMarker(position, name, color) {
-            const sphere = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 80 }, scene);
-            sphere.position = position.clone();
-            const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
+          // A1 / A2 마커
+          function createAmarker(pos2D, name, color) {
+            const sphere = BABYLON.MeshBuilder.CreateSphere(
+              name,
+              { diameter: 80 },
+              scene
+            );
+            sphere.position = new BABYLON.Vector3(pos2D.x, 0, pos2D.y);
+            const mat = new BABYLON.StandardMaterial(
+              name + "_mat",
+              scene
+            );
             mat.emissiveColor = color;
             mat.diffuseColor = color;
             mat.specularColor = BABYLON.Color3.Black();
             sphere.material = mat;
-            return sphere;
+            sphere.parent = floorplanRoot;
+          }
+
+          createAmarker(
+            A1_2D,
+            "A1_marker",
+            new BABYLON.Color3(1, 0, 0)
+          ); // 빨강
+          createAmarker(
+            A2_2D,
+            "A2_marker",
+            new BABYLON.Color3(0, 0, 1)
+          ); // 파랑
+        } catch (e) {
+          console.error(e);
+          infoDiv.innerHTML +=
+            "<br>도면(Office_2.json) 로드 중 오류가 발생했습니다.";
         }
+      }
 
-        let b1Marker = null;
-        let b2Marker = null;
+      await loadFloorplan();
 
-        // A1–A2 (도면) ↔ b1–b2 (세계) 정합
-        function alignFloorplan() {
-            if (!b1 || !b2) return;
-
-            const a1Local = new BABYLON.Vector3(A1_2D.x, 0, A1_2D.y);
-            const a2Local = new BABYLON.Vector3(A2_2D.x, 0, A2_2D.y);
-
-            const dPlan = a2Local.subtract(a1Local);
-            const lenPlan = dPlan.length();
-            if (lenPlan < 1e-6) return;
-
-            const dWorld = b2.subtract(b1);
-            dWorld.y = 0;
-            const lenWorld = dWorld.length();
-            if (lenWorld < 1e-6) return;
-
-            const scale = lenWorld / lenPlan;
-
-            const anglePlan = Math.atan2(dPlan.z, dPlan.x);
-            const angleWorld = Math.atan2(dWorld.z, dWorld.x);
-            const yaw = angleWorld - anglePlan;
-
-            floorplanRoot.scaling.set(scale, scale, scale);
-            floorplanRoot.rotationQuaternion =
-                BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, yaw);
-            floorplanRoot.computeWorldMatrix(true);
-
-            const a1WorldBeforeTranslation = BABYLON.Vector3.TransformCoordinates(
-                a1Local,
-                floorplanRoot.getWorldMatrix()
-            );
-            const offset = b1.subtract(a1WorldBeforeTranslation);
-            floorplanRoot.position.addInPlace(offset);
-            floorplanRoot.computeWorldMatrix(true);
-
-            floorplanRoot.setEnabled(true);
-        }
-
-        // 화면 탭 이벤트 (스크린 터치)
-        xrHelper.baseExperience.sessionManager.onInputSourceAddedObservable.add(input => {
-            if (input.targetRayMode === "screen") {
-                input.onMeshSelectedObservable.add(() => {
-                    if (!latestHit) return;
-                    const hitPos = latestHit.position;
-
-                    if (!b1) {
-                        b1 = hitPos.clone();
-                        if (b1Marker) b1Marker.dispose();
-                        b1Marker = createWorldMarker(b1, "b1_marker",
-                            new BABYLON.Color3(1, 1, 0)); // 노랑
-                    } else if (!b2) {
-                        b2 = hitPos.clone();
-                        if (b2Marker) b2Marker.dispose();
-                        b2Marker = createWorldMarker(b2, "b2_marker",
-                            new BABYLON.Color3(0, 1, 0)); // 초록
-
-                        alignFloorplan();
-                    }
-                });
-            }
+      // WebXR AR 세팅
+      try {
+        xrHelper = await scene.createDefaultXRExperienceAsync({
+          uiOptions: {
+            sessionMode: "immersive-ar",
+            referenceSpaceType: "local-floor"
+          },
+          optionalFeatures: true
         });
-
+      } catch (e) {
+        console.error(e);
+        infoDiv.innerHTML +=
+          "<br>이 기기에서 WebXR AR 세션을 시작할 수 없습니다.";
         return scene;
+      }
+
+      if (!xrHelper || !xrHelper.baseExperience) {
+        infoDiv.innerHTML +=
+          "<br>이 기기/브라우저는 WebXR AR을 지원하지 않습니다. Chrome 최신 버전과 ARCore(Play Services for AR)를 확인하세요.";
+        return scene;
+      }
+
+      const fm = xrHelper.baseExperience.featuresManager;
+
+      // 히트테스트 (바닥 찾기)
+      const hitTest = fm.enableFeature(
+        BABYLON.WebXRHitTest,
+        "latest",
+        {
+          offsetRay: new BABYLON.Ray(
+            new BABYLON.Vector3(0, 1.5, 0),
+            new BABYLON.Vector3(0, -1, 0)
+          )
+        }
+      );
+
+      let latestHit = null;
+      if (hitTest) {
+        hitTest.onHitTestResultObservable.add((results) => {
+          if (results.length > 0) {
+            latestHit = results[0];
+          }
+        });
+      } else {
+        infoDiv.innerHTML +=
+          "<br>이 기기에서는 AR 히트테스트를 사용할 수 없습니다.";
+      }
+
+      // b1, b2 (세계 좌표)와 표시용 마커
+      let b1 = null;
+      let b2 = null;
+
+      function createWorldMarker(position, name, color) {
+        const sphere = BABYLON.MeshBuilder.CreateSphere(
+          name,
+          { diameter: 80 },
+          scene
+        );
+        sphere.position = position.clone();
+        const mat = new BABYLON.StandardMaterial(
+          name + "_mat",
+          scene
+        );
+        mat.emissiveColor = color;
+        mat.diffuseColor = color;
+        mat.specularColor = BABYLON.Color3.Black();
+        sphere.material = mat;
+        return sphere;
+      }
+
+      let b1Marker = null;
+      let b2Marker = null;
+
+      // A1–A2 (도면) ↔ b1–b2 (세계) 정합
+      function alignFloorplan() {
+        if (!b1 || !b2) return;
+
+        const a1Local = new BABYLON.Vector3(A1_2D.x, 0, A1_2D.y);
+        const a2Local = new BABYLON.Vector3(A2_2D.x, 0, A2_2D.y);
+
+        const dPlan = a2Local.subtract(a1Local);
+        const lenPlan = dPlan.length();
+        if (lenPlan < 1e-6) return;
+
+        const dWorld = b2.subtract(b1);
+        dWorld.y = 0;
+        const lenWorld = dWorld.length();
+        if (lenWorld < 1e-6) return;
+
+        const scale = lenWorld / lenPlan;
+
+        const anglePlan = Math.atan2(dPlan.z, dPlan.x);
+        const angleWorld = Math.atan2(dWorld.z, dWorld.x);
+        const yaw = angleWorld - anglePlan;
+
+        floorplanRoot.scaling.set(scale, scale, scale);
+        floorplanRoot.rotationQuaternion =
+          BABYLON.Quaternion.RotationAxis(
+            BABYLON.Axis.Y,
+            yaw
+          );
+        floorplanRoot.computeWorldMatrix(true);
+
+        const a1WorldBeforeTranslation =
+          BABYLON.Vector3.TransformCoordinates(
+            a1Local,
+            floorplanRoot.getWorldMatrix()
+          );
+        const offset = b1.subtract(a1WorldBeforeTranslation);
+        floorplanRoot.position.addInPlace(offset);
+        floorplanRoot.computeWorldMatrix(true);
+
+        floorplanRoot.setEnabled(true);
+      }
+
+      // 화면 탭 이벤트 (스크린 터치)
+      xrHelper.baseExperience.sessionManager.onInputSourceAddedObservable.add(
+        (input) => {
+          if (input.targetRayMode === "screen") {
+            input.onMeshSelectedObservable.add(() => {
+              if (!latestHit) return;
+              const hitPos = latestHit.position;
+
+              if (!b1) {
+                b1 = hitPos.clone();
+                if (b1Marker) b1Marker.dispose();
+                b1Marker = createWorldMarker(
+                  b1,
+                  "b1_marker",
+                  new BABYLON.Color3(1, 1, 0)
+                ); // 노랑
+              } else if (!b2) {
+                b2 = hitPos.clone();
+                if (b2Marker) b2Marker.dispose();
+                b2Marker = createWorldMarker(
+                  b2,
+                  "b2_marker",
+                  new BABYLON.Color3(0, 1, 0)
+                ); // 초록
+
+                alignFloorplan();
+              }
+            });
+          }
+        }
+      );
+
+      // AR 시작 버튼은 XR 준비가 된 뒤에만 보이게
+      enterARBtn.style.display = "block";
+
+      return scene;
     }
 
+    // AR 시작 버튼 로직 (중복 세션 방지)
+    enterARBtn.addEventListener("click", async () => {
+      if (!xrHelper || !xrHelper.baseExperience) {
+        infoDiv.innerHTML +=
+          "<br>XR 시스템 초기화 중입니다. 잠시 후 다시 시도해 주세요.";
+        return;
+      }
+
+      const base = xrHelper.baseExperience;
+      const state = base.state;
+
+      if (
+        state === BABYLON.WebXRState.ENTERING_XR ||
+        state === BABYLON.WebXRState.IN_XR
+      ) {
+        // 이미 AR 세션이 실행 중인 경우에는 재요청하지 않음
+        infoDiv.innerHTML += "<br>이미 AR 세션이 실행 중입니다.";
+        return;
+      }
+
+      try {
+        await base.enterXRAsync("immersive-ar", "local-floor");
+      } catch (e) {
+        console.error(e);
+        infoDiv.innerHTML +=
+          "<br>AR 세션 시작에 실패했습니다: " + e.message;
+      }
+    });
+
     let scene = null;
-    createScene().then(s => {
-        scene = s;
-        engine.runRenderLoop(() => {
-            if (scene) {
-                scene.render();
-            }
-        });
+    createScene().then((s) => {
+      scene = s;
+      engine.runRenderLoop(() => {
+        if (scene) {
+          scene.render();
+        }
+      });
     });
 
     window.addEventListener("resize", () => {
-        engine.resize();
+      engine.resize();
     });
-</script>
+  </script>
 </body>
 </html>
